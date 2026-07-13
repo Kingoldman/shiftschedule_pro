@@ -14,6 +14,10 @@ const staffStore = useStaffStore()
 const canEdit = computed(() => authStore.isLoggedIn)
 
 const currentMonth = ref(dayjs())
+const monthPickerValue = computed({
+  get: () => currentMonth.value.toDate(),
+  set: (d) => { if (d) currentMonth.value = dayjs(d) }
+})
 const groups = ref([])
 const groupMembers = ref({})
 const days = ref([])
@@ -35,6 +39,7 @@ const scheduleState = computed(() => {
 const hasChange = ref(false)
 
 const CACHE_KEY = 'shift_schedule_cache'
+const SCHEDULE_CACHE_TTL = 3 * 60 * 1000 // 3 分钟有效期
 function getCacheMap() {
   try {
     return new Map(JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'))
@@ -55,7 +60,7 @@ const dayTypeOptions = [
   { value: 'workday', label: '工作日', color: 'bg-gray-100 text-gray-600' },
   { value: 'weekend', label: '周末', color: 'bg-blue-100 text-blue-700' },
   { value: 'holiday', label: '节假日', color: 'bg-red-100 text-red-600' },
-  { value: 'vacation', label: '调休日', color: 'bg-orange-100 text-orange-600' },
+  { value: 'vacation', label: '调休补班', color: 'bg-orange-100 text-orange-600' },
 ]
 
 const canModify = computed(() => canEdit.value && !isLocked.value)
@@ -72,21 +77,27 @@ async function loadData(forceRefresh = false) {
       const cacheMap = getCacheMap()
       if (cacheMap.has(cacheKey)) {
         const cached = cacheMap.get(cacheKey)
-        await staffStore.loadAll()
-        groups.value = staffStore.groups
-        groupMembers.value = staffStore.groupMembersMap
-        days.value = cached.days
-        savedSchedule.value = cached.savedSchedule
-        isLocked.value = cached.savedSchedule?.locked || false
-        if (cached.savedSchedule) {
-          schedule.value = JSON.parse(JSON.stringify(cached.savedSchedule.schedule_json))
-        } else {
-          await autoPreviewSchedule(y, m)
+        // TTL 检查：超过有效期则丢弃缓存，重新请求
+        if (cached.ts && Date.now() - cached.ts < SCHEDULE_CACHE_TTL) {
+          await staffStore.loadAll()
+          groups.value = staffStore.groups
+          groupMembers.value = staffStore.groupMembersMap
+          days.value = cached.days
+          savedSchedule.value = cached.savedSchedule
+          isLocked.value = cached.savedSchedule?.locked || false
+          if (cached.savedSchedule) {
+            schedule.value = JSON.parse(JSON.stringify(cached.savedSchedule.schedule_json))
+          } else {
+            await autoPreviewSchedule(y, m)
+          }
+          if (groups.value.length > 0 && !startGroupId.value) {
+            startGroupId.value = groups.value[0].id
+          }
+          return
         }
-        if (groups.value.length > 0 && !startGroupId.value) {
-          startGroupId.value = groups.value[0].id
-        }
-        return
+        // 缓存过期，清除旧条目
+        cacheMap.delete(cacheKey)
+        saveCacheMap(cacheMap)
       }
     }
 
@@ -111,7 +122,7 @@ async function loadData(forceRefresh = false) {
     }
 
     const cacheMap = getCacheMap()
-    cacheMap.set(cacheKey, { days: d, savedSchedule: s })
+    cacheMap.set(cacheKey, { days: d, savedSchedule: s, ts: Date.now() })
     saveCacheMap(cacheMap)
   } finally {
     loading.value = false
@@ -392,6 +403,10 @@ function groupLabel(g) {
   const members = groupMembers.value[g.id] || []
   const names = members.length > 0 ? members.join('') : '空组'
   return `${g.order_id}. ${names}`
+}
+function groupOrderIdLabel(groupId) {
+  const g = groups.value.find(x => x.id === groupId)
+  return g ? `第${g.order_id}组` : null
 }
 
 function viewSnapshot() {
@@ -887,6 +902,16 @@ async function confirmScheduleImport() {
         </div>
         <button class="btn-ghost px-3" @click="nextMonth"><el-icon><ArrowRight /></el-icon></button>
         <button class="btn-ghost" @click="goToday">今天</button>
+        <div class="h-6 w-px bg-gray-200"></div>
+        <el-date-picker
+          v-model="monthPickerValue"
+          type="month"
+          format="YYYY 年 M 月"
+          placeholder="跳转到月份"
+          :clearable="false"
+          size="default"
+          style="width: 160px"
+        />
       </div>
     </div>
 
@@ -1033,7 +1058,7 @@ async function confirmScheduleImport() {
               </el-option>
             </el-select>
             <div v-else class="text-xs font-medium text-gray-700">
-              {{ cell.item.group_name }}
+              {{ groupOrderIdLabel(cell.item.group_id) || cell.item.group_name }}
             </div>
             <div class="text-[10px] text-gray-500 truncate">
               {{ cell.item.employees.map(e => e.name).join('、') || '无成员' }}

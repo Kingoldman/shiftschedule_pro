@@ -12,6 +12,14 @@ const canEdit = computed(() => authStore.isLoggedIn)
 const statMode = ref('monthly')
 const currentYear = ref(dayjs().year())
 const currentMonth = ref(dayjs())
+const monthPickerValue = computed({
+  get: () => currentMonth.value.toDate(),
+  set: (d) => { if (d) currentMonth.value = dayjs(d) }
+})
+const yearPickerValue = computed({
+  get: () => dayjs().year(currentYear.value).toDate(),
+  set: (d) => { if (d) currentYear.value = dayjs(d).year() }
+})
 
 const stats = ref({
   by_employee: [],
@@ -50,7 +58,7 @@ function toggleFreqType(type) {
 }
 
 // 自定义频率：分母为勾选日期性质对应的 eligible 天数之和
-// 例如：工作日+节假日频率 = (eligible_workday + eligible_holiday) / (工作日值班天数 + 节假日值班天数)
+// 例如：工作日(含调休补班)+节假日频率 = (eligible_workday + eligible_holiday) / (工作日值班天数 + 节假日值班天数)
 function customFreq(row) {
   let eligible = 0
   let count = 0
@@ -64,7 +72,7 @@ function customFreq(row) {
 }
 
 const customFreqLabel = computed(() => {
-  const map = { workday: '工作日', weekend: '周末', holiday: '节假日' }
+  const map = { workday: '工作日(含调休补班)', weekend: '周末', holiday: '节假日' }
   return freqTypes.value.map(t => map[t]).join('+') + '频率'
 })
 
@@ -85,11 +93,19 @@ const sortedEmployeeData = computed(() => {
   const getVal = (item) => {
     if (sortKey.value === 'freq') {
       const freq = customFreq(item)
-      return freq === '-' ? 0 : parseFloat(freq)
+      // 频率 = 可值班天数/值班天数，值越小越频繁
+      // 从未值班(count=0)视为最不频繁(Infinity)，升序排最后，降序排最前
+      return freq === '-' ? Infinity : parseFloat(freq)
     }
     return item[sortKey.value] || 0
   }
-  list.sort((a, b) => (getVal(a) - getVal(b)) * order)
+  list.sort((a, b) => {
+    const va = getVal(a), vb = getVal(b)
+    if (va === Infinity && vb === Infinity) return 0
+    if (va === Infinity) return order
+    if (vb === Infinity) return -order
+    return (va - vb) * order
+  })
   return list
 })
 
@@ -175,8 +191,8 @@ async function exportExcel() {
   const rows = data.map((emp, i) => ({
     '排名': i + 1,
     '姓名': emp.name,
-    '工作日(含调休)': emp.workday || 0,
-    '工作日频率': calcFreq(emp, 'workday'),
+    '工作日(含调休补班)': emp.workday || 0,
+    '工作日(含调休补班)频率': calcFreq(emp, 'workday'),
     '周末': emp.weekend || 0,
     '周末频率': calcFreq(emp, 'weekend'),
     '节假日': emp.holiday || 0,
@@ -251,6 +267,15 @@ async function exportExcel() {
             </span>
             <button class="btn-ghost px-2 py-1" @click="nextMonth"><el-icon><ArrowRight /></el-icon></button>
             <button class="btn-ghost px-2 py-1 text-xs" @click="goThisMonth">本月</button>
+            <el-date-picker
+              v-model="monthPickerValue"
+              type="month"
+              format="YYYY 年 M 月"
+              placeholder="跳转"
+              :clearable="false"
+              size="small"
+              style="width: 130px"
+            />
           </div>
         </template>
 
@@ -261,6 +286,15 @@ async function exportExcel() {
             <span class="font-display text-lg font-semibold num min-w-[80px] text-center">{{ currentYear }} 年</span>
             <button class="btn-ghost px-2 py-1" @click="nextYear"><el-icon><ArrowRight /></el-icon></button>
             <button class="btn-ghost px-2 py-1 text-xs" @click="goThisYear">本年</button>
+            <el-date-picker
+              v-model="yearPickerValue"
+              type="year"
+              format="YYYY 年"
+              placeholder="跳转"
+              :clearable="false"
+              size="small"
+              style="width: 110px"
+            />
           </div>
         </template>
 
@@ -281,7 +315,7 @@ async function exportExcel() {
                 <div class="flex gap-1">
                   <button
                     v-for="opt in [
-                      { value: 'workday', label: '工作日', color: '#10b981' },
+                      { value: 'workday', label: '工作日(含调休补班)', color: '#10b981' },
                       { value: 'weekend', label: '周末', color: '#3b82f6' },
                       { value: 'holiday', label: '节假日', color: '#ef4444' },
                     ]"
@@ -317,7 +351,7 @@ async function exportExcel() {
             </el-table-column>
             <el-table-column align="center">
               <template #header>
-                <span class="cursor-pointer select-none" :class="sortHeaderClass('workday')" @click="toggleSort('workday')">工作日(含调休) <span v-html="sortIconHtml('workday')"></span></span>
+                <span class="cursor-pointer select-none" :class="sortHeaderClass('workday')" @click="toggleSort('workday')">工作日(含调休补班) <span v-html="sortIconHtml('workday')"></span></span>
               </template>
               <template #default="{ row }">
                 <span class="num" :class="sortKey === 'workday' ? 'font-semibold text-green-600' : ''">{{ row.workday || 0 }}</span>

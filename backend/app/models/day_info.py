@@ -5,7 +5,7 @@ day_type 字段用一个枚举字符串表示日期性质，互斥设计：
   - workday: 普通工作日
   - weekend: 周末
   - holiday: 法定节假日
-  - vacation: 调休日（即周末调休成工作日）
+  - vacation: 调休补班（即周末调休成工作日）
 
 这样查询和统计都极其简单：按 day_type 分组即可。
 """

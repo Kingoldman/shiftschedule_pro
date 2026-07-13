@@ -31,7 +31,11 @@ export const useStaffStore = defineStore('staff', () => {
   const loaded = ref(!!cached)
 
   async function loadAll(force = false) {
-    if (loaded.value && !force) return
+    // 检查缓存是否仍有效（TTL 内），有效则跳过
+    if (!force && loaded.value) {
+      const c = loadCache()
+      if (c) return  // 缓存未过期，直接使用
+    }
     const [g, e] = await Promise.all([groupApi.list(), employeeApi.list()])
     groups.value = g
     employees.value = e

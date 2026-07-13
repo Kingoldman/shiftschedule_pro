@@ -119,7 +119,7 @@ def compute_statistics(schedule_json: list[dict]) -> dict:
     # 按组聚合
     group_stats: dict[int, dict[str, int]] = {}
     group_name: dict[int, str] = {}
-    # 按日期性质聚合（不含调休日，统计接口已过滤）
+    # 按日期性质聚合（不含调休补班，统计接口已过滤）
     day_type_stats: dict[str, int] = {
         "workday": 0, "weekend": 0, "holiday": 0,
     }

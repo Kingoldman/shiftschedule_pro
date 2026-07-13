@@ -1,7 +1,7 @@
 """统计接口
 
 支持按月、按年、累计、自定义区间统计。
-调休日（vacation）视为工作日一并统计。
+调休补班（vacation）视为工作日一并统计。
 """
 import time
 import calendar
@@ -16,7 +16,7 @@ from app.services.schedule_service import compute_statistics, compute_eligible_d
 
 router = APIRouter()
 
-# 调休日视为工作日统计
+# 调休补班视为工作日统计
 STAT_DAY_TYPES = ["workday", "weekend", "holiday", "vacation"]
 
 # 简易进程内缓存：key -> (result, timestamp)
@@ -34,7 +34,7 @@ def clear_stats_cache(year: int | None = None, month: int | None = None):
 
 
 def _normalize_day_type(item: dict) -> dict:
-    """把调休日统一视为工作日"""
+    """把调休补班统一视为工作日"""
     item = deepcopy(item)
     if item.get("day_type") == "vacation":
         item["day_type"] = "workday"
@@ -42,7 +42,7 @@ def _normalize_day_type(item: dict) -> dict:
 
 
 def _collect_schedule_data(db: Session, start: date, end: date) -> list[dict]:
-    """收集时间范围内的排班数据，调休日合并到工作日"""
+    """收集时间范围内的排班数据，调休补班合并到工作日"""
     records = (
         db.query(Schedule)
         .filter(

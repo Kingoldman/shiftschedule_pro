@@ -12,6 +12,10 @@ const authStore = useAuthStore()
 const canEdit = computed(() => authStore.isLoggedIn)
 
 const currentMonth = ref(dayjs())
+const monthPickerValue = computed({
+  get: () => currentMonth.value.toDate(),
+  set: (d) => { if (d) currentMonth.value = dayjs(d) }
+})
 const days = ref([])
 const loading = ref(false)
 const monthHasSchedule = ref(false)
@@ -21,6 +25,9 @@ const selectedDates = ref(new Set())
 
 // localStorage 缓存
 const DAY_CACHE_KEY = 'day_info_cache'
+const DAY_CACHE_TTL = 5 * 60 * 1000 // 5 分钟有效期
+const SCHEDULE_CACHE_KEY = 'shift_schedule_cache' // 排班页缓存键（跨页失效用）
+
 function getDayCacheMap() {
   try {
     return new Map(JSON.parse(localStorage.getItem(DAY_CACHE_KEY) || '[]'))
@@ -33,6 +40,17 @@ function saveDayCacheMap(map) {
     localStorage.setItem(DAY_CACHE_KEY, JSON.stringify(entries))
   } catch {}
 }
+// 跨页失效：修改日期属性后，同步清除排班页（ScheduleMake）缓存中对应月份的数据
+// 因为 ScheduleMake 缓存了 days 的副本，日期属性变化后需重新拉取
+function invalidateScheduleCache(monthKeys) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SCHEDULE_CACHE_KEY) || '[]')
+    const entries = raw.filter(([k]) => !monthKeys.includes(k))
+    if (entries.length !== raw.length) {
+      localStorage.setItem(SCHEDULE_CACHE_KEY, JSON.stringify(entries))
+    }
+  } catch {}
+}
 
 // 当前选中的日期性质
 const activeDayType = ref('holiday')
@@ -41,7 +59,7 @@ const dayTypeOptions = [
   { value: 'workday', label: '工作日', color: 'bg-gray-100 text-gray-600' },
   { value: 'weekend', label: '周末', color: 'bg-blue-100 text-blue-700' },
   { value: 'holiday', label: '节假日', color: 'bg-red-100 text-red-600' },
-  { value: 'vacation', label: '调休日', color: 'bg-orange-100 text-orange-600' },
+  { value: 'vacation', label: '调休补班', color: 'bg-orange-100 text-orange-600' },
 ]
 
 // 节假日名称下拉选项：中国法定节假日 + 自定义输入
@@ -71,15 +89,22 @@ async function loadDays(forceRefresh = false) {
     if (!forceRefresh) {
       const cacheMap = getDayCacheMap()
       if (cacheMap.has(cacheKey)) {
-        days.value = cacheMap.get(cacheKey)
-        return
+        const cached = cacheMap.get(cacheKey)
+        // TTL 检查：超过有效期则丢弃缓存，重新请求
+        if (cached.ts && Date.now() - cached.ts < DAY_CACHE_TTL) {
+          days.value = cached.days
+          return
+        }
+        // 缓存过期，清除旧条目
+        cacheMap.delete(cacheKey)
+        saveDayCacheMap(cacheMap)
       }
     }
 
     const data = await dayApi.listByMonth(y, m)
     days.value = data
     const cacheMap = getDayCacheMap()
-    cacheMap.set(cacheKey, data)
+    cacheMap.set(cacheKey, { days: data, ts: Date.now() })
     saveDayCacheMap(cacheMap)
   } finally {
     loading.value = false
@@ -192,6 +217,7 @@ async function batchSetDayType() {
     const cacheMap = getDayCacheMap()
     cacheMap.delete(`${y}-${m}`)
     saveDayCacheMap(cacheMap)
+    invalidateScheduleCache([`${y}-${m}`])
     await loadDays(true)
   } catch (e) {}
 }
@@ -229,6 +255,7 @@ async function resetSelectedToDefault() {
     const cacheMap = getDayCacheMap()
     cacheMap.delete(`${y}-${m}`)
     saveDayCacheMap(cacheMap)
+    invalidateScheduleCache([`${y}-${m}`])
     await loadDays(true)
   } catch (e) {}
 }
@@ -238,7 +265,7 @@ async function resetMonthToDefault() {
   if (!canEditDays.value) return
   try {
     await ElMessageBox.confirm(
-      `确认将 ${currentMonth.value.format('YYYY年M月')} 所有日期重置为默认状态？此操作将清除该月所有节假日、调休日设置。`,
+      `确认将 ${currentMonth.value.format('YYYY年M月')} 所有日期重置为默认状态？此操作将清除该月所有节假日、调休补班设置。`,
       '重置当月',
       { type: 'warning', confirmButtonText: '确认重置', cancelButtonText: '取消' }
     )
@@ -261,6 +288,7 @@ async function resetMonthToDefault() {
     const cacheMap = getDayCacheMap()
     cacheMap.delete(`${y}-${m}`)
     saveDayCacheMap(cacheMap)
+    invalidateScheduleCache([`${y}-${m}`])
     await loadDays(true)
   } catch (e) {}
 }
@@ -323,7 +351,7 @@ function downloadDayTemplate() {
     { '日期': `${y}-${mm}-03`, '日期性质': '工作日', '节假日名称': '' },
     { '日期': `${y}-${mm}-04`, '日期性质': '周末', '节假日名称': '' },
     { '日期': `${y}-${mm}-05`, '日期性质': '节假日', '节假日名称': '劳动节' },
-    { '日期': `${y}-${mm}-06`, '日期性质': '调休日', '节假日名称': '' },
+    { '日期': `${y}-${mm}-06`, '日期性质': '调休补班', '节假日名称': '' },
   ]
   const ws = XLSX.utils.json_to_sheet(exampleRows)
   XLSX.utils.sheet_add_aoa(ws, [[title]], { origin: 'A1' })
@@ -356,7 +384,7 @@ function handleDayImportFile(e) {
       if (dataRows.length === 0) {
         errors.push('表格中没有数据行（请从第3行开始填写数据，前两行是标题和表头）')
       }
-      const dayTypeMap = { '工作日': 'workday', '周末': 'weekend', '节假日': 'holiday', '调休日': 'vacation' }
+      const dayTypeMap = { '工作日': 'workday', '周末': 'weekend', '节假日': 'holiday', '调休补班': 'vacation' }
       const parsed = []
       const seenDates = new Set()
       for (let i = 0; i < dataRows.length; i++) {
@@ -378,7 +406,7 @@ function handleDayImportFile(e) {
         const dtVal = String(r[1] || '').trim()
         const dayType = dayTypeMap[dtVal]
         if (!dayType) {
-          errors.push(`第${rowNum}行B列：日期性质应为"工作日/周末/节假日/调休日"之一，当前为"${dtVal}"`)
+          errors.push(`第${rowNum}行B列：日期性质应为"工作日/周末/节假日/调休补班"之一，当前为"${dtVal}"`)
           continue
         }
         // 节假日必须有名称
@@ -460,6 +488,8 @@ async function confirmDayImport() {
       cacheMap.delete(mk)
     }
     saveDayCacheMap(cacheMap)
+    // 跨页失效：同步清除排班页缓存
+    invalidateScheduleCache(monthList)
 
     importDayVisible.value = false
     const importCount = items.length
@@ -496,7 +526,7 @@ async function confirmDayImport() {
         <div class="text-xs text-blue-600 font-mono tracking-[0.3em] uppercase mb-1">/ Calendar</div>
         <h1 class="font-display text-3xl font-semibold text-gray-800">日期设置</h1>
         <div class="flex items-center gap-3 mt-1">
-          <p class="text-sm text-gray-500">点击日期选择，批量设置节假日、调休日</p>
+          <p class="text-sm text-gray-500">点击日期选择，批量设置节假日、调休补班</p>
           <template v-if="canEdit">
             <div class="h-4 w-px bg-gray-300"></div>
             <button class="px-2.5 py-1 rounded-md text-xs font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" :disabled="monthHasSchedule" @click="openDayImportDialog">
@@ -514,6 +544,16 @@ async function confirmDayImport() {
         </div>
         <button class="btn-ghost px-3" @click="nextMonth"><el-icon><ArrowRight /></el-icon></button>
         <button class="btn-ghost" @click="goToday">今天</button>
+        <div class="h-6 w-px bg-gray-200"></div>
+        <el-date-picker
+          v-model="monthPickerValue"
+          type="month"
+          format="YYYY 年 M 月"
+          placeholder="跳转到月份"
+          :clearable="false"
+          size="default"
+          style="width: 160px"
+        />
       </div>
     </div>
 

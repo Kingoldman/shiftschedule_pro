@@ -17,6 +17,14 @@ const allPersons = ref([])
 const statMode = ref('monthly')
 const currentYear = ref(dayjs().year())
 const currentMonth = ref(dayjs())
+const monthPickerValue = computed({
+  get: () => currentMonth.value.toDate(),
+  set: (d) => { if (d) currentMonth.value = dayjs(d) }
+})
+const yearPickerValue = computed({
+  get: () => dayjs().year(currentYear.value).toDate(),
+  set: (d) => { if (d) currentYear.value = dayjs(d).year() }
+})
 
 const modeOptions = [
   { value: 'monthly', label: '按月' },
@@ -43,7 +51,7 @@ function toggleFreqType(type) {
   }
 }
 const customFreqLabel = computed(() => {
-  const map = { workday: '工作日', weekend: '周末', holiday: '节假日' }
+  const map = { workday: '工作日(含调休补班)', weekend: '周末', holiday: '节假日' }
   return freqTypes.value.map(t => map[t]).join('+') + '频率'
 })
 
@@ -102,11 +110,19 @@ const sortedMonthlyTrend = computed(() => {
   const getVal = (item) => {
     if (sortKey.value === 'freq') {
       const f = customFreq(item)
-      return f === '-' ? 0 : parseFloat(f)
+      // 频率 = 可值班天数/值班天数，值越小越频繁
+      // 从未值班(count=0)视为最不频繁(Infinity)，升序排最后，降序排最前
+      return f === '-' ? Infinity : parseFloat(f)
     }
     return item[sortKey.value] || 0
   }
-  list.sort((a, b) => (getVal(a) - getVal(b)) * order)
+  list.sort((a, b) => {
+    const va = getVal(a), vb = getVal(b)
+    if (va === Infinity && vb === Infinity) return 0
+    if (va === Infinity) return order
+    if (vb === Infinity) return -order
+    return (va - vb) * order
+  })
   return list
 })
 const sortColors = { workday: '#10b981', weekend: '#3b82f6', holiday: '#ef4444', total: '#f59e0b', freq: '#8b5cf6' }
@@ -136,26 +152,17 @@ const filteredSortedDuties = computed(() => {
     : all.sort((a, b) => b.date.localeCompare(a.date))
 })
 
-const dutiesPage = ref(1)
-const dutiesPageSize = 20
-const pagedDuties = computed(() => {
-  const all = filteredSortedDuties.value
-  const start = (dutiesPage.value - 1) * dutiesPageSize
-  return all.slice(start, start + dutiesPageSize)
-})
 function toggleDutiesSort() {
   dutiesSortOrder.value = dutiesSortOrder.value === 'asc' ? 'desc' : 'asc'
-  dutiesPage.value = 1
 }
 // el-table @filter-change 回调：同步外部状态
 function onFilterChange(filters) {
   if (filters.day_type !== undefined) {
     dayTypeFilterValues.value = filters.day_type || []
-    dutiesPage.value = 1
   }
 }
 const dayTypeFilters = [
-  { text: '工作日', value: 'workday' },
+  { text: '工作日(含调休补班)', value: 'workday' },
   { text: '周末', value: 'weekend' },
   { text: '节假日', value: 'holiday' },
 ]
@@ -179,7 +186,6 @@ async function loadEmployeeData() {
       result = await statsApi.employee(selectedId.value, 'cumulative')
     }
     employeeData.value = result
-    dutiesPage.value = 1
     dayTypeFilterValues.value = []
     await nextTick()
     renderCharts()
@@ -189,7 +195,6 @@ async function loadEmployeeData() {
 }
 
 function onEmployeeChange() {
-  dutiesPage.value = 1
   dayTypeFilterValues.value = []
   loadEmployeeData()
 }
@@ -214,12 +219,12 @@ function renderTrendChart() {
   const trend = employeeData.value?.monthly_trend || []
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
-    legend: { data: ['工作日','周末','节假日','合计'], top: 0 },
+    legend: { data: ['工作日(含调休补班)','周末','节假日','合计'], top: 0 },
     grid: { left: 36, right: 16, top: 40, bottom: 28 },
     xAxis: { type: 'category', data: trend.map(m => m.month), axisLabel: { fontSize: 11 } },
     yAxis: { type: 'value', minInterval: 1, axisLabel: { fontSize: 11 } },
     series: [
-      { name:'工作日', type:'line', smooth:true, symbol:'circle', symbolSize:6, data: trend.map(m=>m.workday), itemStyle:{color:'#10b981'} },
+      { name:'工作日(含调休补班)', type:'line', smooth:true, symbol:'circle', symbolSize:6, data: trend.map(m=>m.workday), itemStyle:{color:'#10b981'} },
       { name:'周末', type:'line', smooth:true, symbol:'circle', symbolSize:6, data: trend.map(m=>m.weekend), itemStyle:{color:'#3b82f6'} },
       { name:'节假日', type:'line', smooth:true, symbol:'circle', symbolSize:6, data: trend.map(m=>m.holiday), itemStyle:{color:'#ef4444'} },
       { name:'合计', type:'line', smooth:true, symbol:'circle', symbolSize:7, data: trend.map(m=>m.total), itemStyle:{color:'#f59e0b'}, lineStyle:{width:3,type:'dashed'} },
@@ -336,7 +341,7 @@ async function exportPDF() {
       <th style="padding:4px 6px;border:1px solid #e5e7eb;text-align:center">同班人员</th>
     </tr></thead>`
 
-    const wrapperStyle = 'font-family:"Microsoft YaHei","PingFang SC",sans-serif;color:#1f2937;padding:16px 20px 28px 20px;width:750px'
+    const wrapperStyle = 'font-family:"Microsoft YaHei","PingFang SC",sans-serif;color:#1f2937;padding:16px 20px 36px 20px;width:750px'
 
     // 各 section 独立 HTML
     const sections = [
@@ -345,7 +350,7 @@ async function exportPDF() {
         <div style="text-align:center;border-bottom:2px solid #3b82f6;padding-bottom:10px;margin-bottom:12px">
           <div style="font-size:11px;color:#6b7280;letter-spacing:2px">SHIFT SCHEDULE SYSTEM</div>
           <div style="font-size:20px;font-weight:bold;color:#1e40af;margin:3px 0">个人值班数据报告</div>
-          <div style="font-size:11px;color:#6b7280">统计区间：${periodLabel.value} · 生成时间：${now}</div>
+          <div style="font-size:11px;color:#6b7280">生成时间：${now}</div>
         </div>
         <table style="width:100%;font-size:13px;margin-bottom:0;border-collapse:collapse">
           <tr><td style="background:#f3f4f6;padding:5px 10px;width:90px;font-weight:bold">姓名</td><td style="padding:5px 10px">${emp.name || '-'}</td><td style="background:#f3f4f6;padding:5px 10px;width:90px;font-weight:bold">状态</td><td style="padding:5px 10px">${stateText(emp.state)}</td></tr>
@@ -359,7 +364,7 @@ async function exportPDF() {
           <tr>
             <td style="background:#eff6ff;padding:8px;text-align:center;border:1px solid #dbeafe"><div style="font-size:10px;color:#6b7280">累计值班</div><div style="font-size:20px;font-weight:bold;color:#1e40af">${ov.total_duty_days}<span style="font-size:11px">天</span></div></td>
             <td style="background:#eff6ff;padding:8px;text-align:center;border:1px solid #dbeafe"><div style="font-size:10px;color:#6b7280">可值班天数</div><div style="font-size:20px;font-weight:bold;color:#1e40af">${ov.eligible_total}<span style="font-size:11px">天</span></div></td>
-            <td style="background:#ecfdf5;padding:8px;text-align:center;border:1px solid #d1fae5"><div style="font-size:10px;color:#6b7280">工作日频率</div><div style="font-size:15px;font-weight:bold;color:#059669">${ov.freq_workday ? '每' + ov.freq_workday + '天' : '-'}</div><div style="font-size:9px;color:#9ca3af">${ovFreqFormula('workday')}</div></td>
+            <td style="background:#ecfdf5;padding:8px;text-align:center;border:1px solid #d1fae5"><div style="font-size:10px;color:#6b7280">工作日(含调休补班)频率</div><div style="font-size:15px;font-weight:bold;color:#059669">${ov.freq_workday ? '每' + ov.freq_workday + '天' : '-'}</div><div style="font-size:9px;color:#9ca3af">${ovFreqFormula('workday')}</div></td>
           </tr>
           <tr>
             <td style="background:#eff6ff;padding:8px;text-align:center;border:1px solid #dbeafe"><div style="font-size:10px;color:#6b7280">周末频率</div><div style="font-size:15px;font-weight:bold;color:#2563eb">${ov.freq_weekend ? '每' + ov.freq_weekend + '天' : '-'}</div><div style="font-size:9px;color:#9ca3af">${ovFreqFormula('weekend')}</div></td>
@@ -389,7 +394,7 @@ async function exportPDF() {
       <div style="font-size:14px;font-weight:bold;margin-bottom:8px;border-left:3px solid #8b5cf6;padding-left:8px">月度频率明细</div>
       <table style="width:100%;font-size:11px;border-collapse:collapse">
         <thead><tr style="background:#f9fafb">
-          <th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">月份</th><th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">工作日</th><th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">工作日频率</th>
+          <th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">月份</th><th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">工作日(含调休补班)</th><th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">工作日(含调休补班)频率</th>
           <th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">周末</th><th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">周末频率</th>
           <th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">节假日</th><th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">节假日频率</th>
           <th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">合计</th><th style="padding:5px 3px;border:1px solid #e5e7eb;text-align:center">合计频率</th>
@@ -412,10 +417,6 @@ async function exportPDF() {
         </table>
       </div>`)
     }
-    // 7. 页脚
-    sections.push(`<div style="${wrapperStyle}">
-      <div style="font-size:10px;color:#9ca3af;text-align:center;border-top:1px solid #e5e7eb;padding-top:8px">隔壁小王爱值班系统 · 报告生成于 ${genDate}</div>
-    </div>`)
 
     // 遮罩层
     const overlay = document.createElement('div')
@@ -428,7 +429,7 @@ async function exportPDF() {
     // 逐个 section 渲染：每个 section 独立 canvas，加到 PDF 时自动处理分页
     const pdf = new jsPDF('p', 'mm', 'a4')
     const pageW = 210, pageH = 297
-    const marginX = 15, marginTop = 20, marginBottom = 20
+    const marginX = 15, marginTop = 20, marginBottom = 25  // 底部留更多空间避免截断
     const contentW = pageW - marginX * 2
     const contentH = pageH - marginTop - marginBottom
     let currentY = marginTop
@@ -447,7 +448,10 @@ async function exportPDF() {
       }))
       await new Promise(r => setTimeout(r, 100))
 
-      const sCanvas = await html2canvas(sDiv, html2canvasOpts)
+      // position:fixed 元素可能被视口高度裁剪，必须同时传入 height 和 windowHeight
+      // 确保 html2canvas 捕获完整内容（含底部 padding），避免最后一行文字被截断
+      const renderHeight = sDiv.scrollHeight
+      const sCanvas = await html2canvas(sDiv, { ...html2canvasOpts, height: renderHeight, windowHeight: renderHeight + 100 })
       document.body.removeChild(sDiv)
 
       const sHeightMm = (sCanvas.height * contentW) / sCanvas.width
@@ -455,40 +459,42 @@ async function exportPDF() {
 
       if (sHeightMm <= contentH) {
         // 整个 section 能放入当前页
-        if (currentY + sHeightMm > pageH - marginBottom) {
+        // 加 5mm 安全余量：html2canvas 亚像素渲染 + jsPDF addImage 缩放可能导致实际略高
+        if (currentY + sHeightMm > pageH - marginBottom - 5) {
           pdf.addPage(); currentY = marginTop
         }
         pdf.addImage(imgData, 'JPEG', marginX, currentY, contentW, sHeightMm)
         currentY += sHeightMm + 3
       } else {
         // section 太长，需要分页渲染
-        // 核心思路：精确计算每页剩余空间对应的 canvas 像素数，确保切片不会超出页面
-        // 不使用 overlap（会导致切片超出页面），不使用 renderH 压缩（会导致文字变形）
-        const pxPerMm = sCanvas.width / contentW  // 每 mm 对应的 canvas 像素数
+        // 切片时加入 overlap：下一片回退若干像素重新渲染，避免文字在分页处被截断
+        const pxPerMm = sCanvas.width / contentW
+        const OVERLAP_PX = 60  // 约 1-2 行文字高度，确保跨页文字完整
+        const SLICE_SAFETY_MM = 5  // 安全余量，防止亚像素渲染导致内容溢出页底
         let srcY = 0
         while (srcY < sCanvas.height) {
-          // 当前页剩余可用高度（mm）
-          const availMm = pageH - marginBottom - currentY
+          // 当前页剩余可用高度（mm），减去安全余量
+          const availMm = pageH - marginBottom - SLICE_SAFETY_MM - currentY
           if (availMm < 15) {
-            // 剩余空间太小，换新页
             pdf.addPage(); currentY = marginTop
           }
-          const usableMm = pageH - marginBottom - currentY
-          // 剩余空间能容纳的 canvas 像素数（向下取整，确保不超出）
+          const usableMm = pageH - marginBottom - SLICE_SAFETY_MM - currentY
+          // 剩余空间能容纳的 canvas 像素数（向下取整，确保不超出页面）
           const pxThisPage = Math.floor(usableMm * pxPerMm)
-          const srcH = Math.min(pxThisPage, sCanvas.height - srcY)
+          const remainingPx = sCanvas.height - srcY
+          const srcH = Math.min(pxThisPage, remainingPx)
           if (srcH <= 0) break
           const pageCanvas = document.createElement('canvas')
           pageCanvas.width = sCanvas.width; pageCanvas.height = srcH
           const ctx = pageCanvas.getContext('2d')
           ctx.drawImage(sCanvas, 0, srcY, sCanvas.width, srcH, 0, 0, sCanvas.width, srcH)
-          // 切片的精确 mm 高度 = 像素数 / 像素每mm
           const sliceHmm = srcH / pxPerMm
           pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', marginX, currentY, contentW, sliceHmm)
           currentY += sliceHmm + 2
           srcY += srcH
-          // 如果还有更多内容，换新页
+          // 还有更多内容：回退 overlap 像素，下一页从重叠处重新渲染，避免文字截断
           if (srcY < sCanvas.height) {
+            srcY = Math.max(0, srcY - OVERLAP_PX)
             pdf.addPage(); currentY = marginTop
           }
         }
@@ -552,7 +558,7 @@ function freqDescription(freq) {
   return `每${freq.toFixed(1)}天`
 }
 
-const dayTypeMap = { workday: '工作日', weekend: '周末', holiday: '节假日' }
+const dayTypeMap = { workday: '工作日', weekend: '周末', holiday: '节假日', vacation: '调休补班' }
 function dayTypeLabel(t) { return dayTypeMap[t] || t }
 function dayTypeColor(t) {
   return { workday: 'bg-gray-100 text-gray-600', weekend: 'bg-blue-100 text-blue-700', holiday: 'bg-red-100 text-red-600' }[t] || ''
@@ -642,6 +648,15 @@ function weekdayLabel(dateStr) {
             </span>
             <button class="btn-ghost px-2 py-1" @click="nextMonth"><el-icon><ArrowRight /></el-icon></button>
             <button class="btn-ghost px-2 py-1 text-xs" @click="goThisMonth">本月</button>
+            <el-date-picker
+              v-model="monthPickerValue"
+              type="month"
+              format="YYYY 年 M 月"
+              placeholder="跳转"
+              :clearable="false"
+              size="small"
+              style="width: 130px"
+            />
           </div>
         </template>
 
@@ -653,6 +668,15 @@ function weekdayLabel(dateStr) {
             <span class="font-display text-lg font-semibold num min-w-[80px] text-center">{{ currentYear }} 年</span>
             <button class="btn-ghost px-2 py-1" @click="nextYear"><el-icon><ArrowRight /></el-icon></button>
             <button class="btn-ghost px-2 py-1 text-xs" @click="goThisYear">本年</button>
+            <el-date-picker
+              v-model="yearPickerValue"
+              type="year"
+              format="YYYY 年"
+              placeholder="跳转"
+              :clearable="false"
+              size="small"
+              style="width: 110px"
+            />
           </div>
         </template>
 
@@ -703,7 +727,7 @@ function weekdayLabel(dateStr) {
               <div class="text-[10px] text-gray-400 mt-1">{{ employeeData.monthly_trend?.length || 0 }}个月累计</div>
             </div>
             <div class="card p-4">
-              <div class="text-xs text-gray-500 mb-1">工作日频率</div>
+              <div class="text-xs text-gray-500 mb-1">工作日(含调休补班)频率</div>
               <div class="font-display text-2xl font-semibold num text-green-600">
                 {{ freqDescription(employeeData.overview.freq_workday) }}
               </div>
@@ -753,7 +777,7 @@ function weekdayLabel(dateStr) {
                 <div class="flex gap-1">
                   <button
                     v-for="opt in [
-                      { value: 'workday', label: '工作日', color: '#10b981' },
+                      { value: 'workday', label: '工作日(含调休补班)', color: '#10b981' },
                       { value: 'weekend', label: '周末', color: '#3b82f6' },
                       { value: 'holiday', label: '节假日', color: '#ef4444' },
                     ]"
@@ -778,7 +802,7 @@ function weekdayLabel(dateStr) {
               </el-table-column>
               <el-table-column align="center">
                 <template #header>
-                  <span class="cursor-pointer select-none" :class="sortHeaderClass('workday')" @click="toggleSort('workday')">工作日 <span v-html="sortIconHtml('workday')"></span></span>
+                  <span class="cursor-pointer select-none" :class="sortHeaderClass('workday')" @click="toggleSort('workday')">工作日(含调休补班) <span v-html="sortIconHtml('workday')"></span></span>
                 </template>
                 <template #default="{ row }">
                   <span class="num" :class="sortKey === 'workday' ? 'font-semibold text-green-600' : ''">{{ row.workday || 0 }}</span>
@@ -830,7 +854,7 @@ function weekdayLabel(dateStr) {
                 共 <span class="num font-semibold text-gray-700">{{ filteredSortedDuties.length }}</span> 条
               </div>
             </div>
-            <el-table :data="pagedDuties" style="width:100%" size="small" @filter-change="onFilterChange">
+            <el-table :data="filteredSortedDuties" style="width:100%" size="small" max-height="520" @filter-change="onFilterChange">
               <el-table-column label="日期" prop="date" width="120">
                 <template #header>
                   <span class="cursor-pointer select-none flex items-center gap-1" @click="toggleDutiesSort">
@@ -874,16 +898,6 @@ function weekdayLabel(dateStr) {
                 </template>
               </el-table-column>
             </el-table>
-            <div v-if="filteredSortedDuties.length > dutiesPageSize" class="px-5 py-3 flex justify-center">
-              <el-pagination
-                v-model:current-page="dutiesPage"
-                :page-size="dutiesPageSize"
-                :total="filteredSortedDuties.length"
-                layout="prev, pager, next"
-                small
-                background
-              />
-            </div>
           </div>
         </template>
 

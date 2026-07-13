@@ -21,11 +21,10 @@ const loading = ref(false)
 // 是否可编辑（登录后才能编辑）
 const canEdit = computed(() => authStore.isLoggedIn)
 
-// 过滤后的员工列表
+// 过滤后的员工列表（按组顺序 + 组内排序）
 const filteredEmployees = computed(() => {
   let list = employees.value
   if (selectedGroupId.value === -1) {
-    // 未分组/不值班：group_id 为空 或 state=0
     list = list.filter((e) => !e.group_id || e.state === 0)
   } else if (selectedGroupId.value !== null) {
     list = list.filter((e) => e.group_id === selectedGroupId.value)
@@ -33,7 +32,14 @@ const filteredEmployees = computed(() => {
   if (keyword.value) {
     list = list.filter((e) => e.name.includes(keyword.value))
   }
-  return list
+  // 按 group.order_id 排序，同组内按 employee.order_id 排序
+  const groupOrderMap = new Map(groups.value.map(g => [g.id, g.order_id]))
+  return [...list].sort((a, b) => {
+    const ga = groupOrderMap.get(a.group_id) || 9999
+    const gb = groupOrderMap.get(b.group_id) || 9999
+    if (ga !== gb) return ga - gb
+    return (a.order_id || 0) - (b.order_id || 0)
+  })
 })
 
 // 未分组/不值班的人数
@@ -161,17 +167,44 @@ watch(() => empForm.value.state, (newState, oldState) => {
   }
 })
 
+// 切换组时重置组内序号到新组的末尾
+watch(() => empForm.value.group_id, (newGid, oldGid) => {
+  if (newGid === oldGid) return
+  if (!newGid) {
+    empForm.value.order_id = 1
+    return
+  }
+  // 编辑时若仍是原组，保留原序号
+  if (empForm.value.id) {
+    const orig = employees.value.find(e => e.id === empForm.value.id)
+    if (orig && orig.group_id === newGid) return
+  }
+  const count = employees.value.filter(e => e.group_id === newGid && e.state === 1).length
+  empForm.value.order_id = count + 1
+})
+
+// 组内序号上限：编辑时为组内现有人数，新建时为组内人数+1
+const empMaxOrder = computed(() => {
+  if (!empForm.value.group_id) return 1
+  const count = employees.value.filter(e => e.group_id === empForm.value.group_id && e.state === 1).length
+  return empForm.value.id ? count : count + 1
+})
+
 function openEmpDialog(emp = null) {
   if (!canEdit.value) return
   if (emp) {
     empForm.value = { ...emp }
   } else {
+    const targetGid = selectedGroupId.value && selectedGroupId.value > 0 ? selectedGroupId.value : null
+    const count = targetGid
+      ? employees.value.filter(e => e.group_id === targetGid && e.state === 1).length
+      : 0
     empForm.value = {
       id: null,
       name: '',
-      group_id: selectedGroupId.value,
+      group_id: targetGid,
       state: 1,
-      order_id: employees.value.length + 1,
+      order_id: count + 1,
     }
   }
   empDialogVisible.value = true
@@ -185,23 +218,86 @@ async function saveEmp() {
   try {
     let groupId = empForm.value.group_id ?? null
     const state = empForm.value.state ?? 1
-    // 不值班时不能分配组
     if (state === 0 && groupId) {
       ElMessage.warning('不值班状态无法分配组，请先开启值班或移除所属组')
       return
     }
 
-    const data = {
-      name: empForm.value.name,
-      group_id: groupId,
-      state,
-      order_id: empForm.value.order_id,
-    }
+    // 序号夹紧到合法区间
+    const newOrderId = groupId
+      ? Math.max(1, Math.min(empForm.value.order_id, empMaxOrder.value))
+      : 1
+
     if (empForm.value.id) {
-      await employeeApi.update(empForm.value.id, data)
+      // 编辑：先更新基础字段（含 group_id、order_id）
+      const oldEmp = employees.value.find(e => e.id === empForm.value.id)
+      const oldGroupId = oldEmp?.group_id ?? null
+      const oldOrderId = oldEmp?.order_id ?? 1
+
+      await employeeApi.update(empForm.value.id, {
+        name: empForm.value.name,
+        group_id: groupId,
+        state,
+        order_id: newOrderId,
+      })
+
+      // 组或序号变化时重排相关组
+      const groupChanged = groupId !== oldGroupId
+      const orderChanged = groupId === oldGroupId && newOrderId !== oldOrderId
+      if (groupChanged || orderChanged) {
+        const sortItems = []
+        // 旧组：移除该员工后重排为无空隙
+        if (oldGroupId && groupChanged) {
+          const remain = employees.value
+            .filter(e => e.group_id === oldGroupId && e.id !== empForm.value.id)
+            .sort((a, b) => (a.order_id || 0) - (b.order_id || 0))
+          remain.forEach((e, i) => {
+            if (e.order_id !== i + 1) {
+              sortItems.push({ id: e.id, order_id: i + 1, group_id: oldGroupId })
+            }
+          })
+        }
+        // 新组：插入到目标位置后重排
+        if (groupId) {
+          const cur = employees.value
+            .filter(e => e.group_id === groupId && e.id !== empForm.value.id)
+            .sort((a, b) => (a.order_id || 0) - (b.order_id || 0))
+          const insertAt = Math.max(0, Math.min(newOrderId - 1, cur.length))
+          cur.splice(insertAt, 0, { id: empForm.value.id })
+          cur.forEach((e, i) => {
+            if (e.id === empForm.value.id) {
+              sortItems.push({ id: empForm.value.id, order_id: i + 1, group_id: groupId })
+            } else {
+              const orig = employees.value.find(x => x.id === e.id)
+              if (orig && orig.order_id !== i + 1) {
+                sortItems.push({ id: e.id, order_id: i + 1, group_id: groupId })
+              }
+            }
+          })
+        }
+        if (sortItems.length > 0) {
+          await employeeApi.batchSort(sortItems)
+        }
+      }
       ElMessage.success('已更新')
     } else {
-      await employeeApi.create(data)
+      // 新建：先以末位创建，再用 batchSort 调整到目标位置
+      const targetEmps = groupId
+        ? employees.value.filter(e => e.group_id === groupId && e.state === 1).sort((a, b) => (a.order_id || 0) - (b.order_id || 0))
+        : []
+      const created = await employeeApi.create({
+        name: empForm.value.name,
+        group_id: groupId,
+        state,
+        order_id: targetEmps.length + 1,
+      })
+      // 目标位置不在末位时重排
+      if (groupId && newOrderId < targetEmps.length + 1) {
+        const newOrdering = [...targetEmps]
+        newOrdering.splice(Math.max(0, newOrderId - 1), 0, { id: created.id })
+        const sortItems = newOrdering.map((e, i) => ({ id: e.id, order_id: i + 1, group_id: groupId }))
+        await employeeApi.batchSort(sortItems)
+      }
       ElMessage.success('已新增')
     }
     empDialogVisible.value = false
@@ -209,11 +305,31 @@ async function saveEmp() {
   } catch (e) {}
 }
 
+// 重排指定组：删除/移出后保持序号连续无空隙
+async function renumberGroup(groupId, excludeId = null) {
+  if (!groupId) return
+  const remain = employees.value
+    .filter(e => e.group_id === groupId && e.id !== excludeId)
+    .sort((a, b) => (a.order_id || 0) - (b.order_id || 0))
+  const sortItems = []
+  remain.forEach((e, i) => {
+    if (e.order_id !== i + 1) {
+      sortItems.push({ id: e.id, order_id: i + 1, group_id: groupId })
+    }
+  })
+  if (sortItems.length > 0) {
+    await employeeApi.batchSort(sortItems)
+  }
+}
+
 async function deleteEmp(emp) {
   if (!canEdit.value) return
   try {
     await ElMessageBox.confirm(`确认删除员工「${emp.name}」？`, '删除确认', { type: 'warning' })
+    const oldGroupId = emp.group_id
     await employeeApi.remove(emp.id)
+    // 删除后重排原组，保持序号连续
+    if (oldGroupId) await renumberGroup(oldGroupId, emp.id)
     ElMessage.success('已删除')
     await refreshData()
   } catch (e) {}
@@ -224,6 +340,7 @@ async function toggleState(emp) {
   try {
     const newState = emp.state === 1 ? 0 : 1
     const updateData = { state: newState }
+    const oldGroupId = emp.group_id
     // 设为不值班时，同时清除组（调入待分配）
     if (newState === 0 && emp.group_id) {
       updateData.group_id = null
@@ -231,6 +348,8 @@ async function toggleState(emp) {
     await employeeApi.update(emp.id, updateData)
     emp.state = newState
     if (newState === 0) emp.group_id = null
+    // 移出组后重排原组
+    if (newState === 0 && oldGroupId) await renumberGroup(oldGroupId, emp.id)
     ElMessage.success(newState === 1 ? '已设为值班' : '已设为不值班，移入待分配')
     await refreshData()
   } catch (e) {}
@@ -239,6 +358,11 @@ async function toggleState(emp) {
 function groupName(id) {
   const g = groups.value.find((x) => x.id === id)
   return g?.name || '未分组'
+}
+
+function groupOrderId(id) {
+  const g = groups.value.find((x) => x.id === id)
+  return g?.order_id || null
 }
 
 // 批量重命名所有组为组员姓名拼接
@@ -637,14 +761,26 @@ async function confirmImport() {
         row-key="id"
         max-height="520"
       >
-        <el-table-column label="姓名" prop="name" width="120">
+        <el-table-column label="姓名" prop="name" width="100">
           <template #default="{ row }">
             <span class="font-medium">{{ row.name }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="组序号" width="70" align="center">
+          <template #default="{ row }">
+            <span v-if="groupOrderId(row.group_id)" class="num text-sm">{{ groupOrderId(row.group_id) }}</span>
+            <span v-else class="text-gray-300">-</span>
           </template>
         </el-table-column>
         <el-table-column label="所属组" width="120">
           <template #default="{ row }">
             <span class="text-sm">{{ groupName(row.group_id) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="组内序号" width="70" align="center">
+          <template #default="{ row }">
+            <span v-if="row.group_id && row.state === 1" class="num text-sm">{{ row.order_id }}</span>
+            <span v-else class="text-gray-300">-</span>
           </template>
         </el-table-column>
         <el-table-column label="状态" width="100">
@@ -696,7 +832,7 @@ async function confirmImport() {
           <el-input-number
             v-model="groupForm.order_id"
             :min="1"
-            :max="groups.length"
+            :max="groupForm.id ? groups.length : groups.length + 1"
             controls-position="right"
             style="width: 100%"
           />
@@ -719,6 +855,16 @@ async function confirmImport() {
           <el-select v-model="empForm.group_id" placeholder="未分组" clearable class="w-full">
             <el-option v-for="g in groups" :key="g.id" :label="`${g.order_id}. ${g.name}`" :value="g.id" />
           </el-select>
+        </el-form-item>
+        <el-form-item v-if="empForm.group_id && empForm.state === 1" label="组内序号">
+          <el-input-number
+            v-model="empForm.order_id"
+            :min="1"
+            :max="empMaxOrder"
+            controls-position="right"
+            style="width: 100%"
+          />
+          <div class="text-xs text-gray-400 mt-1">修改序号将按插入方式调整，组内其他成员序号依次递补</div>
         </el-form-item>
         <el-form-item label="参与值班">
           <el-switch v-model="empForm.state" :active-value="1" :inactive-value="0" />
