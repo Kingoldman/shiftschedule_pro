@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 全局基础样式：Element Plus 配色方案 */
+@layer base {
+  :root {
+    --color-bg: #f5f7fa;
+    --color-surface: #ffffff;
+    --color-sidebar: #1d4e89;
+    --color-text: #303133;
+    --color-text-muted: #606266;
+    --color-border: #dcdfe6;
+    --color-accent: #409eff;
+  }
+
+  html, body, #app {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+    background: var(--color-bg);
+    color: var(--color-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  .num, .mono {
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-gray-200 rounded-lg;
+    box-shadow: 0 1px 3px 0 rgba(0,0,0,0.04), 0 1px 2px 0 rgba(0,0,0,0.03);
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2
+           bg-blue-500 text-white rounded-md font-medium text-sm
+           hover:bg-blue-600 active:bg-blue-700
+           transition-colors duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2
+           bg-white text-gray-600 border border-gray-200 rounded-md font-medium text-sm
+           hover:bg-gray-50 hover:border-gray-300
+           transition-colors duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2
+           bg-red-500 text-white rounded-md font-medium text-sm
+           hover:bg-red-600 transition-colors duration-150;
+  }
+
+  .section-title {
+    @apply flex items-center gap-3 text-lg font-semibold text-gray-800;
+  }
+  .section-title::before {
+    content: '';
+    @apply block w-1 h-5 bg-blue-500 rounded-full;
+  }
+
+  .day-badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+  }
+  .day-badge-workday { @apply bg-gray-100 text-gray-600; }
+  .day-badge-weekend { @apply bg-blue-100 text-blue-700; }
+  .day-badge-holiday { @apply bg-red-100 text-red-600; }
+  .day-badge-vacation { @apply bg-orange-100 text-orange-600; }
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #c0c4cc;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #909399;
+}
+
+/* Element Plus 默认主题色（无需覆盖，保持原生 #409EFF） */
+
+.el-table .el-table__header-wrapper th {
+  background-color: #f5f7fa !important;
+}
+
+/* FullCalendar 主题适配 */
+.fc {
+  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', sans-serif;
+}
+.fc .fc-toolbar-title {
+  font-family: 'Fraunces', 'Noto Serif SC', serif;
+  font-size: 1.5rem !important;
+  font-weight: 600;
+}
+.fc .fc-button-primary {
+  background-color: #1d4e89 !important;
+  border-color: #1d4e89 !important;
+}
+.fc .fc-button-primary:not(:disabled).fc-button-active,
+.fc .fc-button-primary:not(:disabled):active {
+  background-color: #409eff !important;
+  border-color: #409eff !important;
+}
+
+/* 路由切换动画 */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: all 0.2s ease;
+}
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* 排班日历每日选择框的下拉层级 */
+.schedule-day-popper {
+  z-index: 3050 !important;
+}
+.schedule-day-popper.el-popper.is-light,
+.schedule-day-popper.el-select__popper {
+  animation: none !important;
+  transition: none !important;
+}

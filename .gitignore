@@ -1,0 +1,72 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+sdist/
+wheels/
+*.manifest
+*.spec
+
+#================
+.trae
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+backend/myenv/
+backend/.venv/
+backend/venv/
+
+# ===== 环境变量与密钥 =====
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# ===== 数据库 =====
+*.db
+*.sqlite
+*.sqlite3
+backend/*.db
+backend/*.sqlite
+
+# ===== 前端 (Node.js) =====
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===== 构建产物 =====
+*.log
+backend/logs/
+backend/*.log
+
+# ===== IDE / 编辑器 =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===== 操作系统 =====
+.DS_Store
+Desktop.ini
+
+# ===== 临时文件 =====
+*.tmp
+*.temp
+*.bak
+*.cache

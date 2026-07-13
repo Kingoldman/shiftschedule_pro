@@ -1,0 +1,18 @@
+# 后端依赖
+#
+# 【正常部署（64位 Python）】直接运行：
+#   pip install -r requirements.txt
+#
+# 【本机 32位 Python 3.13 特殊处理】greenlet/httptools 等无预编译 wheel，
+# 需要按 install.py 的步骤逐个安装：
+#   python install.py
+
+fastapi>=0.100.0
+uvicorn>=0.20.0
+sqlalchemy>=2.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-multipart>=0.0.6
+bcrypt>=4.0.0
+PyJWT>=2.0.0
+python-dateutil>=2.8.0
