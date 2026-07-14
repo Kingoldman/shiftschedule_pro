@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import draggable from 'vuedraggable'
@@ -112,7 +112,18 @@ async function saveGroup() {
       }
       ElMessage.success('已更新')
     } else {
-      await groupApi.create({ name: groupForm.value.name, order_id: groupForm.value.order_id })
+      // 新建组：先创建（后端自动分配到末尾），再用 batchSort 插入到目标位置
+      const created = await groupApi.create({ name: groupForm.value.name, order_id: groupForm.value.order_id })
+      const total = groups.value.length + 1 // 新建后总数+1
+      const targetOrder = Math.max(1, Math.min(groupForm.value.order_id, total))
+      // 如果目标位置不是末尾，需要重排
+      if (targetOrder < total) {
+        // 把新组插入到目标位置
+        const arr = [...groups.value]
+        arr.splice(targetOrder - 1, 0, created)
+        const items = arr.map((g, i) => ({ id: g.id, order_id: i + 1 }))
+        await groupApi.batchSort(items)
+      }
       ElMessage.success('已创建')
     }
     groupDialogVisible.value = false
@@ -158,9 +169,12 @@ async function onGroupDragEnd() {
 const empDialogVisible = ref(false)
 const empForm = ref({ id: null, name: '', group_id: null, state: 1, order_id: 1 })
 const empDialogTitle = computed(() => (empForm.value.id ? '编辑员工' : '新增员工'))
+// 防止表单初始化时 watch 误触发
+let skipWatch = false
 
 // 监听值班状态变化：关闭值班时自动清除分组
 watch(() => empForm.value.state, (newState, oldState) => {
+  if (skipWatch) return
   if (newState === 0 && oldState === 1 && empForm.value.group_id) {
     empForm.value.group_id = null
     ElMessage.info('关闭值班后自动移除所属组')
@@ -169,6 +183,7 @@ watch(() => empForm.value.state, (newState, oldState) => {
 
 // 切换组时重置组内序号到新组的末尾
 watch(() => empForm.value.group_id, (newGid, oldGid) => {
+  if (skipWatch) return
   if (newGid === oldGid) return
   if (!newGid) {
     empForm.value.order_id = 1
@@ -192,6 +207,7 @@ const empMaxOrder = computed(() => {
 
 function openEmpDialog(emp = null) {
   if (!canEdit.value) return
+  skipWatch = true
   if (emp) {
     empForm.value = { ...emp }
   } else {
@@ -208,6 +224,7 @@ function openEmpDialog(emp = null) {
     }
   }
   empDialogVisible.value = true
+  nextTick(() => { skipWatch = false })
 }
 
 async function saveEmp() {
@@ -760,30 +777,31 @@ async function confirmImport() {
         style="width: 100%"
         row-key="id"
         max-height="520"
+        :border="false"
       >
-        <el-table-column label="姓名" prop="name" width="100">
+        <el-table-column label="姓名" prop="name" min-width="100">
           <template #default="{ row }">
             <span class="font-medium">{{ row.name }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="组序号" width="70" align="center">
+        <el-table-column label="组序号" min-width="80" align="center">
           <template #default="{ row }">
             <span v-if="groupOrderId(row.group_id)" class="num text-sm">{{ groupOrderId(row.group_id) }}</span>
             <span v-else class="text-gray-300">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="所属组" width="120">
+        <el-table-column label="所属组" min-width="140">
           <template #default="{ row }">
             <span class="text-sm">{{ groupName(row.group_id) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="组内序号" width="70" align="center">
+        <el-table-column label="组内序号" min-width="90" align="center">
           <template #default="{ row }">
             <span v-if="row.group_id && row.state === 1" class="num text-sm">{{ row.order_id }}</span>
             <span v-else class="text-gray-300">-</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="状态" min-width="100">
           <template #default="{ row }">
             <button
               v-if="canEdit"
@@ -804,7 +822,7 @@ async function confirmImport() {
             </span>
           </template>
         </el-table-column>
-        <el-table-column v-if="canEdit" label="操作" width="140" align="right">
+        <el-table-column v-if="canEdit" label="操作" min-width="140" align="right">
           <template #default="{ row }">
             <el-button text size="small" @click="openEmpDialog(row)">
               <el-icon><Edit /></el-icon>编辑

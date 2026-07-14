@@ -96,3 +96,24 @@ def batch_update_days(body: DayInfoBatchUpdate, db: Session = Depends(get_db)):
         d.remark = item.remark
     db.commit()
     return {"msg": f"已更新 {len(body.items)} 条"}
+
+
+@router.get("/modified")
+def list_modified_days(db: Session = Depends(get_db)):
+    """获取所有已修改的日期（与默认状态不一致的日期）
+
+    默认状态：周六/周日=weekend，其余=workday，无备注。
+    返回所有 day_type 不是默认值或有备注的日期记录。
+    """
+    all_days = db.query(DayInfo).order_by(DayInfo.date.asc()).all()
+    modified = []
+    for d in all_days:
+        default_type = _default_day_type(d.date)
+        if d.day_type != default_type or (d.remark and d.remark.strip()):
+            modified.append({
+                "date": d.date.isoformat(),
+                "day_type": d.day_type,
+                "remark": d.remark,
+                "default_type": default_type,
+            })
+    return modified

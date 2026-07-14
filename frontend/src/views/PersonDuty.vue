@@ -35,7 +35,7 @@ const modeOptions = [
 const periodLabel = computed(() => {
   if (statMode.value === 'monthly') return currentMonth.value.format('YYYY 年 M 月')
   if (statMode.value === 'yearly') return `${currentYear.value} 年`
-  return '累计统计'
+  return employeeData.value?.period_range || '累计统计'
 })
 
 const employees = computed(() => allPersons.value)
@@ -66,7 +66,7 @@ function customFreq(row) {
   return (eligible / count).toFixed(1)
 }
 
-// 频率公式文本：X天可值 / Y天值班
+// 频率公式文本：X天统计 / Y天值班
 function freqFormula(row) {
   const eligibleMap = { workday: 'eligible_workday', weekend: 'eligible_weekend', holiday: 'eligible_holiday' }
   let eligible = 0, count = 0
@@ -74,7 +74,7 @@ function freqFormula(row) {
     eligible += row[eligibleMap[t]] || 0
     count += row[t] || 0
   }
-  return `${eligible}天可值 / ${count}天值班`
+  return `${eligible}天统计 / ${count}天值班`
 }
 
 // 概览卡片的频率公式
@@ -89,7 +89,7 @@ function overviewFreqFormula(type) {
   }
   const m = map[type]
   if (!m) return ''
-  return `${o[m.eligible] || 0}天可值 / ${o[m.count] || 0}天值班`
+  return `${o[m.eligible] || 0}天统计 / ${o[m.count] || 0}天值班`
 }
 
 // 月度明细排序（与 Stats.vue 一致的配色）
@@ -110,7 +110,7 @@ const sortedMonthlyTrend = computed(() => {
   const getVal = (item) => {
     if (sortKey.value === 'freq') {
       const f = customFreq(item)
-      // 频率 = 可值班天数/值班天数，值越小越频繁
+      // 频率 = 统计天数/值班天数，值越小越频繁
       // 从未值班(count=0)视为最不频繁(Infinity)，升序排最后，降序排最前
       return f === '-' ? Infinity : parseFloat(f)
     }
@@ -121,6 +121,9 @@ const sortedMonthlyTrend = computed(() => {
     if (va === Infinity && vb === Infinity) return 0
     if (va === Infinity) return order
     if (vb === Infinity) return -order
+    if (typeof va === 'string' || typeof vb === 'string') {
+      return va < vb ? -order : va > vb ? order : 0
+    }
     return (va - vb) * order
   })
   return list
@@ -138,7 +141,7 @@ function sortHeaderClass(key) {
 }
 
 // ===== 所有值班记录：日期排序 + 性质筛选 =====
-const dutiesSortOrder = ref('desc')  // 日期排序：desc=新→旧
+const dutiesSortOrder = ref('asc')  // 日期排序：asc=旧→新（默认升序）
 const dayTypeFilterValues = ref([])  // 性质筛选：空数组=全部（el-table 多选过滤）
 
 const filteredSortedDuties = computed(() => {
@@ -235,7 +238,11 @@ function renderTrendChart() {
 function renderPieChart() {
   if (!pieChartRef.value) return
   if (!pieChart) pieChart = echarts.init(pieChartRef.value)
-  const data = employeeData.value?.day_type_distribution || []
+  const rawData = employeeData.value?.day_type_distribution || []
+  const data = rawData.map(d => ({
+    ...d,
+    name: d.name === '工作日' ? '工作日(含调休补班)' : d.name
+  }))
   pieChart.setOption({
     tooltip: { trigger: 'item', formatter: '{b}: {c}天 ({d}%)' },
     legend: { bottom: 0, left: 'center', itemWidth: 12, itemHeight: 12, textStyle: { fontSize: 12 } },
@@ -297,14 +304,14 @@ async function exportPDF() {
     const ovFreqFormula = (type) => {
       const map = { workday: { eligible: 'eligible_workday', count: 'workday' }, weekend: { eligible: 'eligible_weekend', count: 'weekend' }, holiday: { eligible: 'eligible_holiday', count: 'holiday' }, total: { eligible: 'eligible_total', count: 'total_duty_days' } }
       const m = map[type]; if (!m) return ''
-      return `${ov[m.eligible] || 0}天可值 / ${ov[m.count] || 0}天值班`
+      return `${ov[m.eligible] || 0}天统计 / ${ov[m.count] || 0}天值班`
     }
     const calcFreqAndFormula = (row, type) => {
       const eligibleKey = { workday: 'eligible_workday', weekend: 'eligible_weekend', holiday: 'eligible_holiday', total: 'eligible' }
       const countKey = { workday: 'workday', weekend: 'weekend', holiday: 'holiday', total: 'total' }
       const eligible = row[eligibleKey[type]] || 0; const count = row[countKey[type]] || 0
-      if (!count || !eligible) return { freq: '-', formula: `${eligible}天可值 / ${count}天值班` }
-      return { freq: `每${(eligible / count).toFixed(1)}天`, formula: `${eligible}天可值 / ${count}天值班` }
+      if (!count || !eligible) return { freq: '-', formula: `${eligible}天统计 / ${count}天值班` }
+      return { freq: `每${(eligible / count).toFixed(1)}天`, formula: `${eligible}天统计 / ${count}天值班` }
     }
 
     // 捕获图表为图片
@@ -312,7 +319,7 @@ async function exportPDF() {
     const pieImg = pieChart?.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#fff' }) || ''
 
     // 月度明细表
-    const trendRows = (data.monthly_trend || []).map(m => {
+    const trendRows = [...(data.monthly_trend || [])].sort((a, b) => a.month.localeCompare(b.month)).map(m => {
       const wf = calcFreqAndFormula(m, 'workday'), wef = calcFreqAndFormula(m, 'weekend')
       const hf = calcFreqAndFormula(m, 'holiday'), tf = calcFreqAndFormula(m, 'total')
       return `<tr>
@@ -327,7 +334,7 @@ async function exportPDF() {
       </tr>`
     }).join('')
 
-    const allDuties = data.all_duties || []
+    const allDuties = [...(data.all_duties || [])].sort((a, b) => a.date.localeCompare(b.date))
     const renderDutyRow = (d) => `<tr>
       <td style="padding:3px 6px;border:1px solid #e5e7eb;text-align:center">${d.date}</td>
       <td style="padding:3px 6px;border:1px solid #e5e7eb;text-align:center">${dayTypeMap[d.day_type] || d.day_type}</td>
@@ -363,7 +370,7 @@ async function exportPDF() {
         <table style="width:100%;font-size:12px;border-collapse:collapse">
           <tr>
             <td style="background:#eff6ff;padding:8px;text-align:center;border:1px solid #dbeafe"><div style="font-size:10px;color:#6b7280">累计值班</div><div style="font-size:20px;font-weight:bold;color:#1e40af">${ov.total_duty_days}<span style="font-size:11px">天</span></div></td>
-            <td style="background:#eff6ff;padding:8px;text-align:center;border:1px solid #dbeafe"><div style="font-size:10px;color:#6b7280">可值班天数</div><div style="font-size:20px;font-weight:bold;color:#1e40af">${ov.eligible_total}<span style="font-size:11px">天</span></div></td>
+            <td style="background:#eff6ff;padding:8px;text-align:center;border:1px solid #dbeafe"><div style="font-size:10px;color:#6b7280">统计天数</div><div style="font-size:20px;font-weight:bold;color:#1e40af">${ov.eligible_total}<span style="font-size:11px">天</span></div></td>
             <td style="background:#ecfdf5;padding:8px;text-align:center;border:1px solid #d1fae5"><div style="font-size:10px;color:#6b7280">工作日(含调休补班)频率</div><div style="font-size:15px;font-weight:bold;color:#059669">${ov.freq_workday ? '每' + ov.freq_workday + '天' : '-'}</div><div style="font-size:9px;color:#9ca3af">${ovFreqFormula('workday')}</div></td>
           </tr>
           <tr>
@@ -722,7 +729,7 @@ function weekdayLabel(dateStr) {
               <div class="text-[10px] text-gray-400 mt-1">天</div>
             </div>
             <div class="card p-4">
-              <div class="text-xs text-gray-500 mb-1">可值班天数</div>
+              <div class="text-xs text-gray-500 mb-1">统计天数</div>
               <div class="font-display text-2xl font-semibold num text-blue-600">{{ employeeData.overview.eligible_total }}</div>
               <div class="text-[10px] text-gray-400 mt-1">{{ employeeData.monthly_trend?.length || 0 }}个月累计</div>
             </div>
@@ -794,8 +801,11 @@ function weekdayLabel(dateStr) {
                 </div>
               </div>
             </div>
-            <el-table :data="sortedMonthlyTrend" style="width:100%" size="small">
-              <el-table-column label="月份" prop="month" width="100">
+            <el-table :data="sortedMonthlyTrend" style="width:100%" size="small" max-height="520">
+              <el-table-column prop="month" width="100">
+                <template #header>
+                  <span class="cursor-pointer select-none" :class="sortHeaderClass('month')" @click="toggleSort('month')">月份 <span v-html="sortIconHtml('month')"></span></span>
+                </template>
                 <template #default="{ row }">
                   <span class="num font-medium">{{ row.month }}</span>
                 </template>

@@ -172,18 +172,14 @@ def compute_eligible_days(
     end: date,
     group_snapshot: dict | None = None,
 ) -> dict[int, dict[str, int]]:
-    """计算区间内每个员工处于值班状态的天数，按日期性质拆分。
+    """计算区间内每个员工的统计天数，按日期性质拆分。
 
     返回: {employee_id: {"workday": N, "weekend": N, "holiday": N, "total": N}}
 
-    逻辑：遍历区间内每一天，根据状态日志判断该员工当天是否值班(state=1)，
-    并按日期性质累加。无状态日志的员工按当前 state 推算。
-
-    group_snapshot: 如果提供，优先使用快照中的组/员工/状态日志数据，
-    确保历史统计不受后续人员变动影响。
+    简化算法：排班以整月为单位，如果员工在某月有值班记录，
+    则该月的统计天数 = 整月对应性质的天数。
+    不再依赖 state_logs 或 group_snapshot，计算简单可靠。
     """
-    from datetime import datetime as dt
-
     # 预加载区间内每天的日期性质
     all_dates = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     day_infos = {
@@ -197,122 +193,17 @@ def compute_eligible_days(
             return "workday" if dt_val == "vacation" else dt_val
         return "weekend" if d.weekday() >= 5 else "workday"
 
+    # 统计区间内各性质总天数
     total_by_type = {"workday": 0, "weekend": 0, "holiday": 0}
     for d in all_dates:
         dt_val = _day_type(d)
         if dt_val in total_by_type:
             total_by_type[dt_val] += 1
 
+    # 所有员工都有相同的统计天数（整月天数）
     result = {}
+    total = sum(total_by_type.values())
     for eid in employee_ids:
-        # 获取员工当前状态
-        emp_state = 0
-        if group_snapshot:
-            # 从快照中查找：遍历所有组的所有员工
-            found = False
-            for g in group_snapshot.get("groups", []):
-                for emp in g.get("employees", []):
-                    if emp["id"] == eid:
-                        emp_state = emp.get("state", 0)
-                        found = True
-                        break
-                if found:
-                    break
-            # 快照中没找到（可能员工不在任何组），从数据库获取
-            if not found:
-                emp = db.get(Employee, eid)
-                if emp:
-                    emp_state = emp.state
-        else:
-            emp = db.get(Employee, eid)
-            if emp:
-                emp_state = emp.state
-
-        if not group_snapshot:
-            # 无快照：从数据库查询状态日志
-            logs = (
-                db.query(EmployeeStateLog)
-                .filter(EmployeeStateLog.employee_id == eid)
-                .order_by(EmployeeStateLog.changed_at.asc())
-                .all()
-            )
-        else:
-            # 有快照：从快照的状态日志构建
-            logs_data = group_snapshot.get("state_logs", [])
-            logs = [type('Log', (), {
-                'employee_id': l['employee_id'],
-                'old_state': l['old_state'],
-                'new_state': l['new_state'],
-                'changed_at': dt.fromisoformat(l['changed_at']) if l.get('changed_at') else None,
-            })() for l in logs_data if l['employee_id'] == eid]
-
-        # 过滤掉 old_state == new_state 的日志（组变更、导入等非状态变更记录）
-        # 这些日志的 new_state 不可靠，不应影响 state_at_start 计算
-        logs = [log for log in logs if log.old_state != log.new_state]
-
-        # 如果员工已不在数据库中（被删除）且无状态日志，
-        # 但出现在排班记录的 by_employee 中，视为整月值班
-        if not logs and emp_state == 0:
-            # 只有出现在排班数据中的员工才会被传入此函数
-            # 既然出现在排班中，说明在该区间内是值班的
-            result[eid] = {**total_by_type, "total": sum(total_by_type.values())}
-            continue
-
-        if not logs:
-            if emp_state == 1:
-                result[eid] = {**total_by_type, "total": sum(total_by_type.values())}
-            else:
-                result[eid] = {"workday": 0, "weekend": 0, "holiday": 0, "total": 0}
-            continue
-
-        state_at_start = 0
-        for log in logs:
-            log_date = log.changed_at.date() if isinstance(log.changed_at, dt) else log.changed_at
-            if log_date < start:
-                state_at_start = log.new_state
-
-        if all(
-            (log.changed_at.date() if isinstance(log.changed_at, dt) else log.changed_at) >= start
-            for log in logs
-        ):
-            # 所有状态变更都在排班周期之后。
-            # 如果员工当前状态为值班(state=1)，说明在保存排班时该员工已是值班状态
-            # （快照在保存排班时捕获，或员工出现在排班数据中说明当时在值班），
-            # 因此排班周期内视为全程值班。
-            if emp_state == 1:
-                state_at_start = 1
-            else:
-                state_at_start = logs[0].old_state
-
-        changes = []
-        for log in logs:
-            log_date = log.changed_at.date() if isinstance(log.changed_at, dt) else log.changed_at
-            if start <= log_date <= end:
-                changes.append((log_date, log.new_state))
-
-        eligible = {"workday": 0, "weekend": 0, "holiday": 0}
-        current_state = state_at_start
-        segment_start = start
-
-        for change_date, new_state in sorted(changes):
-            if current_state == 1:
-                d = segment_start
-                while d < change_date:
-                    dt_val = _day_type(d)
-                    if dt_val in eligible:
-                        eligible[dt_val] += 1
-                    d += timedelta(days=1)
-            current_state = new_state
-            segment_start = change_date
-
-        if current_state == 1:
-            d = segment_start
-            while d <= end:
-                dt_val = _day_type(d)
-                if dt_val in eligible:
-                    eligible[dt_val] += 1
-                d += timedelta(days=1)
-
-        result[eid] = {**eligible, "total": sum(eligible.values())}
+        result[eid] = {**total_by_type, "total": total}
 
     return result

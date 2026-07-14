@@ -27,6 +27,7 @@ const stats = ref({
   by_day_type: { workday: 0, weekend: 0, holiday: 0 },
   total_days: 0,
   period_label: '',
+  period_range: '',
 })
 const loading = ref(false)
 
@@ -41,7 +42,7 @@ const modeOptions = [
 const periodLabel = computed(() => {
   if (statMode.value === 'monthly') return currentMonth.value.format('YYYY 年 M 月')
   if (statMode.value === 'yearly') return `${currentYear.value} 年`
-  if (statMode.value === 'cumulative') return '累计统计'
+  if (statMode.value === 'cumulative') return stats.value?.period_range || '累计统计'
   return ''
 })
 
@@ -93,7 +94,7 @@ const sortedEmployeeData = computed(() => {
   const getVal = (item) => {
     if (sortKey.value === 'freq') {
       const freq = customFreq(item)
-      // 频率 = 可值班天数/值班天数，值越小越频繁
+      // 频率 = 统计天数/值班天数，值越小越频繁
       // 从未值班(count=0)视为最不频繁(Infinity)，升序排最后，降序排最前
       return freq === '-' ? Infinity : parseFloat(freq)
     }
@@ -178,7 +179,7 @@ async function exportExcel() {
     }
   }
 
-  // 频率计算：可值班天数 / 实际值班天数
+  // 频率计算：统计天数 / 实际值班天数
   const calcFreq = (emp, type) => {
     const eligibleMap = { workday: 'eligible_workday', weekend: 'eligible_weekend', holiday: 'eligible_holiday', total: 'eligible_total' }
     const countMap = { workday: 'workday', weekend: 'weekend', holiday: 'holiday', total: 'total' }
@@ -390,7 +391,7 @@ async function exportExcel() {
                   {{ customFreq(row) === '-' ? '-' : `每${customFreq(row)}天` }}
                 </span>
                 <div class="text-[10px] text-gray-400">
-                  {{ (() => { const m={workday:'eligible_workday',weekend:'eligible_weekend',holiday:'eligible_holiday'}; let e=0,c=0; for(const t of freqTypes){e+=row[m[t]]||0;c+=row[t]||0} return e })() }}天可值 / {{ (() => { let c=0; for(const t of freqTypes) c+=row[t]||0; return c })() }}天值班
+                  {{ (() => { const m={workday:'eligible_workday',weekend:'eligible_weekend',holiday:'eligible_holiday'}; let e=0,c=0; for(const t of freqTypes){e+=row[m[t]]||0;c+=row[t]||0} return e })() }}天统计 / {{ (() => { let c=0; for(const t of freqTypes) c+=row[t]||0; return c })() }}天值班
                 </div>
               </template>
             </el-table-column>

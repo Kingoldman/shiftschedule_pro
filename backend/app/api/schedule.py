@@ -1,5 +1,5 @@
 """排班管理接口"""
-from datetime import date
+from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -35,7 +35,9 @@ def auto_preview(year: int, month: int, db: Session = Depends(get_db)):
     """自动预览排班
 
     从最近有保存记录的月份推断起始组，生成当月预览。
-    支持连续推断：如果上月无排班，继续往前找，最多回溯12个月。
+    支持跨月连续：从最近的已保存月份开始，逐月模拟预览，
+    确保未保存月份之间也按顺序接续（如7月最后是27组，8月从28组开始，
+    8月最后是2组，则9月从3组开始）。
     """
     groups = db.query(ShiftGroup).order_by(ShiftGroup.order_id.asc()).all()
     if not groups:
@@ -53,10 +55,19 @@ def auto_preview(year: int, month: int, db: Session = Depends(get_db)):
     if not non_empty_groups:
         return {"schedule": [], "start_group_id": None}
 
-    # 从当月往前搜索，找到最近的有排班记录的月份
-    start_group_id = non_empty_groups[0].id
+    group_ids = [g.id for g in non_empty_groups]
+
+    import calendar
+    from app.models.day_info import DayInfo
+
+    def _month_dates(y: int, m: int) -> list[date]:
+        last_day = calendar.monthrange(y, m)[1]
+        return [date(y, m, d) for d in range(1, last_day + 1)]
+
+    # 1. 从当月往前搜索，找到最近的有排班记录的月份
+    last_saved_group_id = None
     search_year, search_month = year, month
-    for _ in range(12):
+    for _ in range(24):
         if search_month == 1:
             prev_year, prev_month = search_year - 1, 12
         else:
@@ -69,26 +80,49 @@ def auto_preview(year: int, month: int, db: Session = Depends(get_db)):
         )
         if prev_record and prev_record.schedule_json:
             last_item = prev_record.schedule_json[-1]
-            last_group_id = last_item.get("group_id")
-            if last_group_id:
-                group_ids = [g.id for g in non_empty_groups]
-                if last_group_id in group_ids:
-                    idx = group_ids.index(last_group_id)
-                    next_idx = (idx + 1) % len(non_empty_groups)
-                    start_group_id = non_empty_groups[next_idx].id
+            last_saved_group_id = last_item.get("group_id")
             break
         search_year, search_month = prev_year, prev_month
 
-    import calendar
-    from app.models.day_info import DayInfo
+    # 2. 计算起始组
+    if last_saved_group_id and last_saved_group_id in group_ids:
+        idx = group_ids.index(last_saved_group_id)
+        start_group_id = non_empty_groups[(idx + 1) % len(group_ids)].id
+        # search_year/search_month 是搜索过程中最后停在的月份
+        # 它是"最近保存月的下一个月"（因为找到保存月时 break，未更新 search_*）
+        # 直接作为模拟起始月，不需要再 +1
+        sim_year, sim_month = search_year, search_month
+    else:
+        # 无历史记录，从第一个非空组开始
+        start_group_id = non_empty_groups[0].id
+        sim_year, sim_month = year, month
 
-    last_day = calendar.monthrange(year, month)[1]
-    all_dates = [date(year, month, d) for d in range(1, last_day + 1)]
-    day_infos = {
-        d.date: d.day_type
-        for d in db.query(DayInfo).filter(DayInfo.date.in_(all_dates)).all()
-    }
+    # 3. 逐月模拟：从最近保存月的下一个月到目标月，逐月生成预览以追踪末尾组
+    while (sim_year, sim_month) < (year, month):
+        # 计算下一个月
+        next_month_date = date(sim_year, sim_month, 1) + timedelta(days=32)
+        sim_year_next, sim_month_next = next_month_date.year, next_month_date.month
 
+        # 生成当前模拟月的排班
+        sim_dates = _month_dates(sim_year, sim_month)
+        sim_to_arrange = [d.isoformat() for d in sim_dates]
+        if sim_to_arrange:
+            sim_result = generate_schedule(
+                db, sim_year, sim_month, start_group_id,
+                date.fromisoformat(sim_to_arrange[0]),
+                [date.fromisoformat(d) for d in sim_to_arrange]
+            )
+            # 取该月最后一个值班组，作为下个月的起始
+            if sim_result:
+                last_g = sim_result[-1].get("group_id")
+                if last_g and last_g in group_ids:
+                    idx = group_ids.index(last_g)
+                    start_group_id = non_empty_groups[(idx + 1) % len(group_ids)].id
+
+        sim_year, sim_month = sim_year_next, sim_month_next
+
+    # 4. 生成目标月的预览
+    all_dates = _month_dates(year, month)
     to_arrange = [d.isoformat() for d in all_dates]
 
     if not to_arrange:

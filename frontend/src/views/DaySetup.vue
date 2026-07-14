@@ -183,6 +183,24 @@ const modifiedDays = computed(() => {
 // 过滤后的日历高亮：是否高亮显示已修改日期
 const highlightModified = ref(true)
 
+// ===== 全局已修改日期清单 =====
+const modifiedDialogVisible = ref(false)
+const allModifiedDays = ref([])
+const modifiedLoading = ref(false)
+
+async function openModifiedDialog() {
+  modifiedDialogVisible.value = true
+  modifiedLoading.value = true
+  try {
+    const data = await dayApi.listModified()
+    allModifiedDays.value = data || []
+  } catch {
+    allModifiedDays.value = []
+  } finally {
+    modifiedLoading.value = false
+  }
+}
+
 function toggleSelect(dateStr) {
   if (!canEditDays.value) return
   if (selectedDates.value.has(dateStr)) {
@@ -525,14 +543,17 @@ async function confirmDayImport() {
       <div>
         <div class="text-xs text-blue-600 font-mono tracking-[0.3em] uppercase mb-1">/ Calendar</div>
         <h1 class="font-display text-3xl font-semibold text-gray-800">日期设置</h1>
-        <div class="flex items-center gap-3 mt-1">
-          <p class="text-sm text-gray-500">点击日期选择，批量设置节假日、调休补班</p>
+        <p class="text-sm text-gray-500 mt-1">点击日期选择，批量设置节假日、调休补班</p>
+        <!-- 全局操作按钮：放在最上方，因为这两个功能针对所有日期 -->
+        <div class="flex items-center gap-2 mt-3">
           <template v-if="canEdit">
-            <div class="h-4 w-px bg-gray-300"></div>
-            <button class="px-2.5 py-1 rounded-md text-xs font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" :disabled="monthHasSchedule" @click="openDayImportDialog">
+            <button class="px-3 py-1.5 rounded-md text-xs font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 flex items-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" :disabled="monthHasSchedule" @click="openDayImportDialog">
               <el-icon><Upload /></el-icon>导入日期
             </button>
           </template>
+          <button class="px-3 py-1.5 rounded-md text-xs font-medium bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-200 flex items-center gap-1 transition-colors" @click="openModifiedDialog">
+            <el-icon><List /></el-icon>所有已修改日期
+          </button>
         </div>
       </div>
 
@@ -794,6 +815,45 @@ async function confirmDayImport() {
         <button v-if="importDayPreview.length > 0" class="btn-primary ml-2" :disabled="importDayLoading" @click="confirmDayImport">
           {{ importDayLoading ? '导入中...' : '确认导入' }}
         </button>
+      </template>
+    </el-dialog>
+
+    <!-- 全局已修改日期清单对话框 -->
+    <el-dialog v-model="modifiedDialogVisible" title="所有已修改日期清单" width="720px">
+      <div v-loading="modifiedLoading">
+        <div v-if="allModifiedDays.length === 0 && !modifiedLoading" class="py-8 text-center text-sm text-gray-400">
+          暂无已修改的日期
+        </div>
+        <template v-else>
+          <div class="mb-3 text-sm text-gray-500">共 <span class="num font-semibold text-gray-700">{{ allModifiedDays.length }}</span> 个已修改日期</div>
+          <el-table :data="allModifiedDays" size="small" max-height="480">
+            <el-table-column prop="date" label="日期" width="130" />
+            <el-table-column label="星期" width="80">
+              <template #default="{ row }">周{{ weekdayName(row.date) }}</template>
+            </el-table-column>
+            <el-table-column label="原性质" width="100">
+              <template #default="{ row }">
+                <span class="text-xs text-gray-400">{{ dayTypeLabel(row.default_type) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="当前性质" width="120">
+              <template #default="{ row }">
+                <span class="px-2 py-0.5 rounded text-xs font-medium" :class="dayTypeClass(row.day_type)">
+                  {{ dayTypeLabel(row.day_type) }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="节假日名称">
+              <template #default="{ row }">
+                <span v-if="row.remark" class="text-sm text-gray-700">{{ row.remark }}</span>
+                <span v-else class="text-gray-300">—</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </div>
+      <template #footer>
+        <button class="btn-ghost" @click="modifiedDialogVisible = false">关闭</button>
       </template>
     </el-dialog>
   </div>

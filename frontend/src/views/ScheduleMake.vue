@@ -73,7 +73,9 @@ async function loadData(forceRefresh = false) {
     const m = currentMonth.value.month() + 1
     const cacheKey = `${y}-${m}`
 
+    // 每次切换月份时重置起始组，让 auto_preview 接口推断正确的起始组
     if (!forceRefresh) {
+      startGroupId.value = null
       const cacheMap = getCacheMap()
       if (cacheMap.has(cacheKey)) {
         const cached = cacheMap.get(cacheKey)
@@ -1099,40 +1101,83 @@ async function confirmScheduleImport() {
     </div>
 
     <!-- 快照查看弹窗 -->
-    <el-dialog v-model="snapshotVisible" :title="`人员快照 — ${currentMonth.format('YYYY年M月')}`" width="640px">
+    <el-dialog v-model="snapshotVisible" :title="`人员快照 — ${currentMonth.format('YYYY年M月')}`" width="720px">
       <div v-if="snapshotData">
         <div class="text-xs text-gray-400 mb-3">保存排班时的组与人员配置，用于历史统计回溯</div>
-        <div v-for="g in snapshotData.groups" :key="g.id" class="mb-3 p-3 bg-gray-50 rounded-md">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-blue-500 text-white text-xs font-bold">{{ g.order_id }}</span>
-            <span class="font-medium text-gray-800">{{ g.name }}</span>
-            <span class="text-xs text-gray-400 ml-auto">{{ g.employees.length }} 人</span>
-          </div>
-          <div class="flex flex-wrap gap-1.5">
-            <span
-              v-for="emp in g.employees"
-              :key="emp.id"
-              class="px-2 py-0.5 rounded text-xs"
-              :class="emp.state === 1 ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'"
-            >
-              {{ emp.name }}
-              <span v-if="emp.state !== 1" class="text-[10px]">(不值班)</span>
-            </span>
-            <span v-if="g.employees.length === 0" class="text-xs text-gray-400">空组</span>
-          </div>
+        <!-- 人员快照表格 -->
+        <div class="mb-4">
+          <div class="text-xs font-medium text-gray-500 mb-2">人员配置（共 {{ snapshotData.groups.length }} 组）</div>
+          <el-table
+            :data="snapshotData.groups"
+            size="small"
+            max-height="360"
+            row-key="id"
+          >
+            <el-table-column label="组序号" width="70" align="center">
+              <template #default="{ row }">
+                <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-blue-500 text-white text-xs font-bold">{{ row.order_id }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="组名" min-width="140">
+              <template #default="{ row }">
+                <span class="font-medium text-gray-800">{{ row.name }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="人数" width="60" align="center">
+              <template #default="{ row }">
+                <span class="num text-sm">{{ row.employees.length }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="组内人员" min-width="200">
+              <template #default="{ row }">
+                <span v-if="row.employees.length === 0" class="text-xs text-gray-400">空组</span>
+                <template v-else>
+                  <span
+                    v-for="emp in row.employees"
+                    :key="emp.id"
+                    class="px-1.5 py-0.5 rounded text-xs mr-1"
+                    :class="emp.state === 1 ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'"
+                  >
+                    {{ emp.name }}<span v-if="emp.state !== 1" class="text-[10px]">(不值班)</span>
+                  </span>
+                </template>
+              </template>
+            </el-table-column>
+          </el-table>
         </div>
-        <div v-if="snapshotData.state_logs && snapshotData.state_logs.length > 0" class="mt-4">
-          <div class="text-xs font-medium text-gray-500 mb-2">变更记录</div>
-          <div class="max-h-40 overflow-y-auto">
-            <div
-              v-for="(log, i) in snapshotData.state_logs"
-              :key="i"
-              class="flex items-center gap-2 text-xs py-1 border-b border-gray-100"
-            >
-              <span class="text-gray-600">{{ log.employee_name }}</span>
-              <span class="text-gray-400 ml-auto">{{ log.changed_at?.substring(0, 10) }}</span>
-            </div>
-          </div>
+        <!-- 变更记录表格 -->
+        <div v-if="snapshotData.state_logs && snapshotData.state_logs.length > 0">
+          <div class="text-xs font-medium text-gray-500 mb-2">变更记录（共 {{ snapshotData.state_logs.length }} 条）</div>
+          <el-table
+            :data="snapshotData.state_logs"
+            size="small"
+            max-height="260"
+          >
+            <el-table-column label="人员" min-width="120">
+              <template #default="{ row }">
+                <span class="text-gray-700">{{ row.employee_name }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="变更前" width="80" align="center">
+              <template #default="{ row }">
+                <span class="text-xs" :class="row.old_state === 1 ? 'text-green-600' : 'text-gray-400'">
+                  {{ row.old_state === 1 ? '值班' : '不值班' }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="变更后" width="80" align="center">
+              <template #default="{ row }">
+                <span class="text-xs" :class="row.new_state === 1 ? 'text-green-600' : 'text-gray-400'">
+                  {{ row.new_state === 1 ? '值班' : '不值班' }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="变更时间" min-width="150">
+              <template #default="{ row }">
+                <span class="text-xs text-gray-400">{{ row.changed_at?.substring(0, 19).replace('T', ' ') || '-' }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
         </div>
       </div>
       <div v-else class="py-8 text-center text-gray-400 text-sm">暂无快照数据</div>

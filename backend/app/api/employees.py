@@ -47,6 +47,9 @@ def list_employees(
 @router.post("", response_model=EmployeeOut, dependencies=[Depends(get_current_admin)])
 def create_employee(body: EmployeeCreate, db: Session = Depends(get_db)):
     """新增员工"""
+    # 重名校验：同名人员不允许创建
+    if db.query(Employee).filter(Employee.name == body.name).first():
+        raise HTTPException(status_code=400, detail="姓名已存在，请修改后重试")
     if body.group_id and not db.get(ShiftGroup, body.group_id):
         raise HTTPException(status_code=400, detail="所选组不存在")
     # 不值班时不能分配组
@@ -110,6 +113,10 @@ def update_employee(emp_id: int, body: EmployeeUpdate, db: Session = Depends(get
     if not e:
         raise HTTPException(status_code=404, detail="员工不存在")
     data = body.model_dump(exclude_unset=True)
+    # 重名校验：排除自身
+    if "name" in data and data["name"] != e.name:
+        if db.query(Employee).filter(Employee.name == data["name"], Employee.id != emp_id).first():
+            raise HTTPException(status_code=400, detail="姓名已存在，请修改后重试")
     # 处理 group_id：前端传 null 表示清除分组
     if "group_id" in data:
         gid = data["group_id"]

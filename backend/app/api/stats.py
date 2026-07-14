@@ -107,12 +107,10 @@ def _enrich_with_eligible_multi(
     range_start: date | None = None,
     range_end: date | None = None,
 ) -> dict:
-    """跨多月统计：逐月使用各自保存时的快照计算 eligible 天数后累加。
+    """跨多月统计：逐月计算统计天数后累加。
 
-    每条 Schedule 记录都有保存时的 group_snapshot，用它来还原当时的值班状态，
-    确保历史统计不受后续人员/日期变动影响。
-
-    range_start/range_end: 自定义区间边界，会过滤每月参与计算的排班日期。
+    简化算法：排班以整月为单位，每月有值班记录的员工获得该月整月天数。
+    不再依赖 group_snapshot 或 state_logs。
     """
     emp_ids = [e["id"] for e in result.get("by_employee", [])]
     if not emp_ids:
@@ -123,30 +121,29 @@ def _enrich_with_eligible_multi(
         for eid in emp_ids
     }
 
-    start_iso = range_start.isoformat() if range_start else None
-    end_iso = range_end.isoformat() if range_end else None
-
     for record in records:
         items = [
             _normalize_day_type(item)
             for item in record.schedule_json
             if item.get("day_type") in STAT_DAY_TYPES
         ]
-        # 自定义区间过滤：只保留区间内的日期
-        if start_iso:
-            items = [item for item in items if item.get("date", "") >= start_iso]
-        if end_iso:
-            items = [item for item in items if item.get("date", "") <= end_iso]
         if not items:
+            continue
+        # 找出该月有值班记录的员工
+        month_emp_ids = set()
+        for item in items:
+            for emp in item.get("employees", []):
+                eid = emp.get("id")
+                if eid and eid in total_eligible:
+                    month_emp_ids.add(eid)
+        if not month_emp_ids:
             continue
         dates = [item.get("date") for item in items if item.get("date")]
         if not dates:
             continue
         start = date.fromisoformat(min(dates))
         end = date.fromisoformat(max(dates))
-        eligible = compute_eligible_days(
-            db, emp_ids, start, end, group_snapshot=record.group_snapshot
-        )
+        eligible = compute_eligible_days(db, list(month_emp_ids), start, end)
         for eid, e in eligible.items():
             if eid in total_eligible:
                 total_eligible[eid]["workday"] += e.get("workday", 0)
@@ -254,7 +251,11 @@ def get_custom_stats(
 @router.get("/cumulative")
 def get_cumulative_stats(db: Session = Depends(get_db)):
     """累计统计（所有已保存的排班）"""
-    records = db.query(Schedule).all()
+    records = (
+        db.query(Schedule)
+        .order_by(Schedule.year.asc(), Schedule.month.asc())
+        .all()
+    )
     all_items = []
     for record in records:
         for item in record.schedule_json:
@@ -264,10 +265,18 @@ def get_cumulative_stats(db: Session = Depends(get_db)):
     if not all_items:
         return {"by_employee": [], "by_day_type": {
             "workday": 0, "weekend": 0, "holiday": 0,
-        }, "total_days": 0, "period_label": "累计"}
+        }, "total_days": 0, "period_label": "累计", "period_range": ""}
     result = compute_statistics(all_items)
     result["total_days"] = len(all_items)
-    result["period_label"] = "累计"
+    # 计算时间区间
+    if records:
+        first = records[0]
+        last = records[-1]
+        result["period_label"] = f"{first.year}年{first.month}月—{last.year}年{last.month}月"
+        result["period_range"] = f"{first.year}年{first.month}月—{last.year}年{last.month}月"
+    else:
+        result["period_label"] = "累计"
+        result["period_range"] = ""
     result = _enrich_with_eligible_multi(db, result, records)
     return result
 
@@ -277,12 +286,13 @@ def get_employees_with_history(db: Session = Depends(get_db)):
     """获取所有曾参与值班的人员列表（包括已删除的）
 
     合并当前员工表和排班历史记录中的员工信息。
-    用于个人查询页的人员选择器，确保已删除但有过值班记录的人员也能查询。
+    按姓名去重：如果当前员工表有同名人员，则不再从历史中添加"已删除"记录。
     """
     from app.models.employee import Employee
     from app.models.group import ShiftGroup
 
     result: dict[int, dict] = {}
+    current_names: set[str] = set()
 
     # 当前员工
     current_emps = db.query(Employee).order_by(Employee.id.asc()).all()
@@ -300,17 +310,19 @@ def get_employees_with_history(db: Session = Depends(get_db)):
             "group_name": group_name,
             "deleted": False,
         }
+        current_names.add(emp.name)
 
-    # 从排班历史中找已删除的员工
+    # 从排班历史中找已删除的员工（按姓名去重）
     records = db.query(Schedule).order_by(Schedule.year.asc(), Schedule.month.asc()).all()
     for record in records:
         for item in record.schedule_json:
             for emp in item.get("employees", []):
                 eid = emp.get("id")
-                if eid is not None and eid not in result:
+                ename = emp.get("name", f"员工{eid}")
+                if eid is not None and eid not in result and ename not in current_names:
                     result[eid] = {
                         "id": eid,
-                        "name": emp.get("name", f"员工{eid}"),
+                        "name": ename,
                         "state": None,
                         "group_id": None,
                         "group_name": None,
@@ -451,8 +463,7 @@ def get_employee_stats(
         m_holiday = sum(1 for x in month_items if x["day_type"] == "holiday")
         m_total = len(month_items)
 
-        # 该月 eligible 天数：用整月排班日期范围，不是该员工参与的范围
-        # 与原统计功能一致（_enrich_with_eligible 使用所有排班条目的日期范围）
+        # 该月统计天数：整月天数按性质拆分（简化算法）
         all_month_dates = [
             item.get("date") for item in record.schedule_json
             if item.get("date") and item.get("day_type") in STAT_DAY_TYPES
@@ -465,7 +476,7 @@ def get_employee_stats(
             start = date.fromisoformat(min(dates))
             end = date.fromisoformat(max(dates))
         eligible = compute_eligible_days(
-            db, [employee_id], start, end, group_snapshot=record.group_snapshot
+            db, [employee_id], start, end
         )
         e = eligible.get(employee_id, {"workday": 0, "weekend": 0, "holiday": 0, "total": 0})
         m_eligible = e.get("total", 0)
@@ -535,6 +546,17 @@ def get_employee_stats(
             "group_name": None,
         }
 
+    # 累计模式：计算时间区间
+    period_range = ""
+    if monthly_trend:
+        first_month = monthly_trend[0]["month"]
+        last_month = monthly_trend[-1]["month"]
+        # 格式 "2024-06" → "2024年6月"
+        def fmt(m):
+            y, mo = m.split("-")
+            return f"{y}年{int(mo)}月"
+        period_range = f"{fmt(first_month)}—{fmt(last_month)}"
+
     return {
         "employee": employee_info,
         "overview": overview,
@@ -542,4 +564,5 @@ def get_employee_stats(
         "day_type_distribution": day_type_distribution,
         "all_duties": recent_duties,
         "duty_days": duty_days,
+        "period_range": period_range,
     }
