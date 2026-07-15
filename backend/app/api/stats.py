@@ -165,8 +165,10 @@ def _enrich_with_eligible_multi(
 def get_monthly_stats(year: int, month: int, db: Session = Depends(get_db)):
     """获取某月排班统计"""
     cache_key = f"monthly_{year}_{month}"
-    if cache_key in _stats_cache:
-        cached_result, cached_at = _stats_cache[cache_key]
+    # 使用 dict.get() 原子操作避免多线程竞态：防止 in 检查后、[] 取值前被 clear_stats_cache 清除
+    cached = _stats_cache.get(cache_key)
+    if cached is not None:
+        cached_result, cached_at = cached
         if time.time() - cached_at < _CACHE_TTL:
             return cached_result
 

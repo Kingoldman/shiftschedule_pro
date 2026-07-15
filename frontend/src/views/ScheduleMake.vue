@@ -149,7 +149,9 @@ async function autoPreviewSchedule(year, month) {
 }
 
 onMounted(loadData)
-watch(currentMonth, loadData)
+// 注意：不能直接 watch(currentMonth, loadData)，因为 watch 回调签名是 (newVal, oldVal)，
+// loadData 的 forceRefresh 参数会被误传为 dayjs 对象（truthy），导致缓存逻辑被跳过
+watch(currentMonth, () => loadData())
 
 // 对比当前组/人员与快照的差异
 function detectSnapshotDiff() {
@@ -287,7 +289,7 @@ async function generateSchedule() {
     schedule.value = result.schedule
     hasChange.value = true
     ElMessage.success(`已生成 ${result.schedule.length} 天排班预览`)
-  } catch (e) {}
+  } catch (e) { console.error('操作失败:', e) }
 }
 
 async function saveSchedule() {
@@ -318,7 +320,7 @@ async function saveSchedule() {
     cacheMap.delete(cacheKey)
     saveCacheMap(cacheMap)
     await loadData(true)
-  } catch (e) {}
+  } catch (e) { console.error('操作失败:', e) }
 }
 
 // 取消当月值班：删除数据库中的保存记录，恢复为自动预览
@@ -1025,7 +1027,7 @@ async function confirmScheduleImport() {
           class="min-h-[100px] border border-gray-200 rounded-md p-2 transition-all relative"
           :class="[
             cell.inMonth ? 'bg-white' : 'bg-gray-50 opacity-50',
-            cell.item ? dayTypeClass(cell.item.day_type).replace('text-', 'border-l-4 border-l-').split(' ')[0] + ' border-l-4' : '',
+            cell.item ? 'border-l-4' : '',
           ]"
           :style="{
             borderLeftColor: cell.item ? (cell.item.day_type === 'holiday' ? '#f56c6c' : cell.item.day_type === 'vacation' ? '#e6a23c' : cell.item.day_type === 'weekend' ? '#409eff' : '#909399') : undefined,

@@ -128,7 +128,11 @@ async function saveGroup() {
     }
     groupDialogVisible.value = false
     await refreshData()
-  } catch (e) {}
+  } catch (e) {
+    console.error('操作失败:', e)
+    // 失败时同步后端真实状态（name 可能已改但 batchSort 失败，或反之）
+    await refreshData()
+  }
 }
 
 async function deleteGroup(group) {
@@ -147,7 +151,7 @@ async function deleteGroup(group) {
       : `已删除空组「${group.name}」`)
     if (selectedGroupId.value === group.id) selectedGroupId.value = null
     await refreshData()
-  } catch (e) {}
+  } catch (e) { console.error('操作失败:', e) }
 }
 
 // 拖拽组排序
@@ -319,7 +323,11 @@ async function saveEmp() {
     }
     empDialogVisible.value = false
     await refreshData()
-  } catch (e) {}
+  } catch (e) {
+    console.error('操作失败:', e)
+    // 失败时同步后端真实状态，避免乐观更新导致 UI 与后端不一致
+    await refreshData()
+  }
 }
 
 // 重排指定组：删除/移出后保持序号连续无空隙
@@ -349,7 +357,7 @@ async function deleteEmp(emp) {
     if (oldGroupId) await renumberGroup(oldGroupId, emp.id)
     ElMessage.success('已删除')
     await refreshData()
-  } catch (e) {}
+  } catch (e) { console.error('操作失败:', e) }
 }
 
 async function toggleState(emp) {
@@ -363,13 +371,15 @@ async function toggleState(emp) {
       updateData.group_id = null
     }
     await employeeApi.update(emp.id, updateData)
-    emp.state = newState
-    if (newState === 0) emp.group_id = null
     // 移出组后重排原组
     if (newState === 0 && oldGroupId) await renumberGroup(oldGroupId, emp.id)
     ElMessage.success(newState === 1 ? '已设为值班' : '已设为不值班，移入待分配')
     await refreshData()
-  } catch (e) {}
+  } catch (e) {
+    console.error('操作失败:', e)
+    // 失败时同步后端真实状态，避免乐观更新改了 store 但后端未改成功
+    await refreshData()
+  }
 }
 
 function groupName(id) {
@@ -402,7 +412,7 @@ async function batchRenameGroups() {
     }
     ElMessage.success(`已重命名 ${count} 个组`)
     await refreshData()
-  } catch (e) {}
+  } catch (e) { console.error('操作失败:', e) }
 }
 
 function exportStaffStatus() {
@@ -664,7 +674,7 @@ async function confirmImport() {
     importDialogVisible.value = false
     importPreview.value = []
     await refreshData()
-  } catch (e) {} finally {
+  } catch (e) { console.error('导入失败:', e) } finally {
     importLoading.value = false
   }
 }

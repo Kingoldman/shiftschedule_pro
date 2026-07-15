@@ -112,7 +112,9 @@ async function loadDays(forceRefresh = false) {
 }
 
 onMounted(loadDays)
-watch(currentMonth, loadDays)
+// 注意：不能直接 watch(currentMonth, loadDays)，因为 watch 回调签名是 (newVal, oldVal)，
+// loadDays 的 forceRefresh 参数会被误传为 dayjs 对象（truthy），导致缓存逻辑被跳过
+watch(currentMonth, () => loadDays())
 
 // 日历表格数据
 const calendarCells = computed(() => {
@@ -237,7 +239,7 @@ async function batchSetDayType() {
     saveDayCacheMap(cacheMap)
     invalidateScheduleCache([`${y}-${m}`])
     await loadDays(true)
-  } catch (e) {}
+  } catch (e) { console.error('操作失败:', e) }
 }
 
 /** 计算某日期的默认性质：周六/周日=weekend，其余=workday */
@@ -275,7 +277,7 @@ async function resetSelectedToDefault() {
     saveDayCacheMap(cacheMap)
     invalidateScheduleCache([`${y}-${m}`])
     await loadDays(true)
-  } catch (e) {}
+  } catch (e) { console.error('操作失败:', e) }
 }
 
 /** 重置当月所有日期为默认状态 */
@@ -308,7 +310,7 @@ async function resetMonthToDefault() {
     saveDayCacheMap(cacheMap)
     invalidateScheduleCache([`${y}-${m}`])
     await loadDays(true)
-  } catch (e) {}
+  } catch (e) { console.error('操作失败:', e) }
 }
 
 function prevMonth() {

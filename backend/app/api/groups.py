@@ -162,6 +162,35 @@ def import_groups_overwrite(body: list[dict], db: Session = Depends(get_db)):
     或支持员工对象格式: [{"name": "甲组", "employees": [{"name":"张三","state":1}, {"name":"李四","state":0}]}, ...]
     """
     from app.models.state_log import EmployeeStateLog
+    from sqlalchemy.exc import IntegrityError
+
+    # 预校验：组名不能重复（ShiftGroup.name 有唯一约束）
+    seen_group_names = set()
+    for idx, item in enumerate(body):
+        gname = item.get("name", f"第{idx + 1}组")
+        if gname in seen_group_names:
+            raise HTTPException(
+                status_code=400,
+                detail=f"导入数据中存在重复组名「{gname}」，请修改后重试"
+            )
+        seen_group_names.add(gname)
+
+    # 预校验：员工名在覆盖模式下也要求内部唯一（用户要求严格校验）
+    seen_emp_names = set()
+    for item in body:
+        for emp_entry in item.get("employees", []):
+            if isinstance(emp_entry, dict):
+                emp_name = str(emp_entry.get("name", "")).strip()
+            else:
+                emp_name = str(emp_entry).strip()
+            if not emp_name:
+                continue
+            if emp_name in seen_emp_names:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"导入数据中存在重复员工名「{emp_name}」，请修改后重试"
+                )
+            seen_emp_names.add(emp_name)
 
     # 先删除所有员工（必须先删员工，因为外键依赖组）
     db.query(EmployeeStateLog).delete()
@@ -172,45 +201,58 @@ def import_groups_overwrite(body: list[dict], db: Session = Depends(get_db)):
     created_groups = 0
     created_employees = 0
 
-    for idx, item in enumerate(body):
-        group_name = item.get("name", f"第{idx + 1}组")
-        raw_employees = item.get("employees", [])
+    try:
+        for idx, item in enumerate(body):
+            group_name = item.get("name", f"第{idx + 1}组")
+            raw_employees = item.get("employees", [])
 
-        g = ShiftGroup(name=group_name, order_id=idx + 1)
-        db.add(g)
-        db.flush()
-        created_groups += 1
-        db.add(EmployeeStateLog(
-            employee_id=0,
-            employee_name=f"导入组:第{g.order_id}组「{g.name}」",
-            old_state=0,
-            new_state=g.order_id,
-        ))
-
-        for order, emp_entry in enumerate(raw_employees, 1):
-            # 支持字符串和对象两种格式
-            if isinstance(emp_entry, dict):
-                emp_name = str(emp_entry.get("name", "")).strip()
-                emp_state = int(emp_entry.get("state", 1))
-            else:
-                emp_name = str(emp_entry).strip()
-                emp_state = 1
-            if not emp_name:
-                continue
-            # 不值班员工 state=0，不分配组；值班员工 state=1，分配到当前组
-            group_id = g.id if emp_state == 1 else None
-            e = Employee(name=emp_name, order_id=order, state=emp_state, group_id=group_id)
-            db.add(e)
+            g = ShiftGroup(name=group_name, order_id=idx + 1)
+            db.add(g)
             db.flush()
-            created_employees += 1
+            created_groups += 1
             db.add(EmployeeStateLog(
-                employee_id=e.id,
-                employee_name=f"导入员工:{e.name}，分配至第{g.order_id}组「{g.name}」" if emp_state == 1 else f"导入员工:{e.name}（不值班）",
+                employee_id=0,
+                employee_name=f"导入组:第{g.order_id}组「{g.name}」",
                 old_state=0,
-                new_state=emp_state,
+                new_state=g.order_id,
             ))
 
-    db.commit()
+            for order, emp_entry in enumerate(raw_employees, 1):
+                # 支持字符串和对象两种格式
+                if isinstance(emp_entry, dict):
+                    emp_name = str(emp_entry.get("name", "")).strip()
+                    emp_state = int(emp_entry.get("state", 1))
+                else:
+                    emp_name = str(emp_entry).strip()
+                    emp_state = 1
+                if not emp_name:
+                    continue
+                # 不值班员工 state=0，不分配组；值班员工 state=1，分配到当前组
+                group_id = g.id if emp_state == 1 else None
+                e = Employee(name=emp_name, order_id=order, state=emp_state, group_id=group_id)
+                db.add(e)
+                db.flush()
+                created_employees += 1
+                db.add(EmployeeStateLog(
+                    employee_id=e.id,
+                    employee_name=f"导入员工:{e.name}，分配至第{g.order_id}组「{g.name}」" if emp_state == 1 else f"导入员工:{e.name}（不值班）",
+                    old_state=0,
+                    new_state=emp_state,
+                ))
+
+        db.commit()
+    except IntegrityError as e:
+        # 唯一约束冲突时回滚，避免 session 处于不可用状态污染后续请求
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail=f"导入失败（数据库约束冲突）：{e.orig}"
+        )
+    except Exception:
+        # 其他异常也回滚，保持 session 干净
+        db.rollback()
+        raise
+
     return {
         "msg": f"覆盖导入完成：新建 {created_groups} 组、{created_employees} 人",
         "created_groups": created_groups,

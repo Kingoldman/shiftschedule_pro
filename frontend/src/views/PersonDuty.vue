@@ -292,6 +292,12 @@ async function exportPDF() {
       fileHandle = null
     }
   }
+  // 遮罩层：在 try 外声明，以便 finally 中一定能移除（避免异常时遮罩永久锁死 UI）
+  const overlay = document.createElement('div')
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.97);z-index:99998;display:flex;align-items:center;justify-content:center;font-size:15px;color:#666;'
+  overlay.textContent = '正在生成 PDF 报告，请稍候...'
+  document.body.appendChild(overlay)
+
   try {
     const html2canvasMod = await import('html2canvas')
     const html2canvas = html2canvasMod.default || html2canvasMod
@@ -425,12 +431,6 @@ async function exportPDF() {
       </div>`)
     }
 
-    // 遮罩层
-    const overlay = document.createElement('div')
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.97);z-index:99998;display:flex;align-items:center;justify-content:center;font-size:15px;color:#666;'
-    overlay.textContent = '正在生成 PDF 报告，请稍候...'
-    document.body.appendChild(overlay)
-
     const html2canvasOpts = { scale: 2, useCORS: true, backgroundColor: '#ffffff', width: 750, windowWidth: 800, logging: false }
 
     // 逐个 section 渲染：每个 section 独立 canvas，加到 PDF 时自动处理分页
@@ -442,73 +442,76 @@ async function exportPDF() {
     let currentY = marginTop
 
     for (let si = 0; si < sections.length; si++) {
+      // sDiv 在循环内 try-finally 确保移除，避免异常时残留 DOM
       const sDiv = document.createElement('div')
       sDiv.style.cssText = 'position:fixed;top:0;left:0;width:750px;background:#ffffff;z-index:99997;'
       sDiv.innerHTML = sections[si]
       document.body.appendChild(sDiv)
 
-      // 等待图片加载
-      const imgs = Array.from(sDiv.querySelectorAll('img'))
-      await Promise.all(imgs.map(img => {
-        if (img.complete && img.naturalWidth > 0) return Promise.resolve()
-        return new Promise(resolve => { img.onload = resolve; img.onerror = resolve; setTimeout(resolve, 2000) })
-      }))
-      await new Promise(r => setTimeout(r, 100))
+      try {
+        // 等待图片加载
+        const imgs = Array.from(sDiv.querySelectorAll('img'))
+        await Promise.all(imgs.map(img => {
+          if (img.complete && img.naturalWidth > 0) return Promise.resolve()
+          return new Promise(resolve => { img.onload = resolve; img.onerror = resolve; setTimeout(resolve, 2000) })
+        }))
+        await new Promise(r => setTimeout(r, 100))
 
-      // position:fixed 元素可能被视口高度裁剪，必须同时传入 height 和 windowHeight
-      // 确保 html2canvas 捕获完整内容（含底部 padding），避免最后一行文字被截断
-      const renderHeight = sDiv.scrollHeight
-      const sCanvas = await html2canvas(sDiv, { ...html2canvasOpts, height: renderHeight, windowHeight: renderHeight + 100 })
-      document.body.removeChild(sDiv)
+        // position:fixed 元素可能被视口高度裁剪，必须同时传入 height 和 windowHeight
+        // 确保 html2canvas 捕获完整内容（含底部 padding），避免最后一行文字被截断
+        const renderHeight = sDiv.scrollHeight
+        const sCanvas = await html2canvas(sDiv, { ...html2canvasOpts, height: renderHeight, windowHeight: renderHeight + 100 })
 
-      const sHeightMm = (sCanvas.height * contentW) / sCanvas.width
-      const imgData = sCanvas.toDataURL('image/jpeg', 0.92)
+        const sHeightMm = (sCanvas.height * contentW) / sCanvas.width
+        const imgData = sCanvas.toDataURL('image/jpeg', 0.92)
 
-      if (sHeightMm <= contentH) {
-        // 整个 section 能放入当前页
-        // 加 5mm 安全余量：html2canvas 亚像素渲染 + jsPDF addImage 缩放可能导致实际略高
-        if (currentY + sHeightMm > pageH - marginBottom - 5) {
-          pdf.addPage(); currentY = marginTop
-        }
-        pdf.addImage(imgData, 'JPEG', marginX, currentY, contentW, sHeightMm)
-        currentY += sHeightMm + 3
-      } else {
-        // section 太长，需要分页渲染
-        // 切片时加入 overlap：下一片回退若干像素重新渲染，避免文字在分页处被截断
-        const pxPerMm = sCanvas.width / contentW
-        const OVERLAP_PX = 60  // 约 1-2 行文字高度，确保跨页文字完整
-        const SLICE_SAFETY_MM = 5  // 安全余量，防止亚像素渲染导致内容溢出页底
-        let srcY = 0
-        while (srcY < sCanvas.height) {
-          // 当前页剩余可用高度（mm），减去安全余量
-          const availMm = pageH - marginBottom - SLICE_SAFETY_MM - currentY
-          if (availMm < 15) {
+        if (sHeightMm <= contentH) {
+          // 整个 section 能放入当前页
+          // 加 5mm 安全余量：html2canvas 亚像素渲染 + jsPDF addImage 缩放可能导致实际略高
+          if (currentY + sHeightMm > pageH - marginBottom - 5) {
             pdf.addPage(); currentY = marginTop
           }
-          const usableMm = pageH - marginBottom - SLICE_SAFETY_MM - currentY
-          // 剩余空间能容纳的 canvas 像素数（向下取整，确保不超出页面）
-          const pxThisPage = Math.floor(usableMm * pxPerMm)
-          const remainingPx = sCanvas.height - srcY
-          const srcH = Math.min(pxThisPage, remainingPx)
-          if (srcH <= 0) break
-          const pageCanvas = document.createElement('canvas')
-          pageCanvas.width = sCanvas.width; pageCanvas.height = srcH
-          const ctx = pageCanvas.getContext('2d')
-          ctx.drawImage(sCanvas, 0, srcY, sCanvas.width, srcH, 0, 0, sCanvas.width, srcH)
-          const sliceHmm = srcH / pxPerMm
-          pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', marginX, currentY, contentW, sliceHmm)
-          currentY += sliceHmm + 2
-          srcY += srcH
-          // 还有更多内容：回退 overlap 像素，下一页从重叠处重新渲染，避免文字截断
-          if (srcY < sCanvas.height) {
-            srcY = Math.max(0, srcY - OVERLAP_PX)
-            pdf.addPage(); currentY = marginTop
+          pdf.addImage(imgData, 'JPEG', marginX, currentY, contentW, sHeightMm)
+          currentY += sHeightMm + 3
+        } else {
+          // section 太长，需要分页渲染
+          // 切片时加入 overlap：下一片回退若干像素重新渲染，避免文字在分页处被截断
+          const pxPerMm = sCanvas.width / contentW
+          const OVERLAP_PX = 60  // 约 1-2 行文字高度，确保跨页文字完整
+          const SLICE_SAFETY_MM = 5  // 安全余量，防止亚像素渲染导致内容溢出页底
+          let srcY = 0
+          while (srcY < sCanvas.height) {
+            // 当前页剩余可用高度（mm），减去安全余量
+            const availMm = pageH - marginBottom - SLICE_SAFETY_MM - currentY
+            if (availMm < 15) {
+              pdf.addPage(); currentY = marginTop
+            }
+            const usableMm = pageH - marginBottom - SLICE_SAFETY_MM - currentY
+            // 剩余空间能容纳的 canvas 像素数（向下取整，确保不超出页面）
+            const pxThisPage = Math.floor(usableMm * pxPerMm)
+            const remainingPx = sCanvas.height - srcY
+            const srcH = Math.min(pxThisPage, remainingPx)
+            if (srcH <= 0) break
+            const pageCanvas = document.createElement('canvas')
+            pageCanvas.width = sCanvas.width; pageCanvas.height = srcH
+            const ctx = pageCanvas.getContext('2d')
+            ctx.drawImage(sCanvas, 0, srcY, sCanvas.width, srcH, 0, 0, sCanvas.width, srcH)
+            const sliceHmm = srcH / pxPerMm
+            pdf.addImage(pageCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', marginX, currentY, contentW, sliceHmm)
+            currentY += sliceHmm + 2
+            srcY += srcH
+            // 还有更多内容：回退 overlap 像素，下一页从重叠处重新渲染，避免文字截断
+            if (srcY < sCanvas.height) {
+              srcY = Math.max(0, srcY - OVERLAP_PX)
+              pdf.addPage(); currentY = marginTop
+            }
           }
         }
+      } finally {
+        // 确保临时 DOM 一定被移除，即使 html2canvas 抛错
+        if (sDiv.parentNode) document.body.removeChild(sDiv)
       }
     }
-
-    document.body.removeChild(overlay)
 
     // 保存
     if (fileHandle) {
@@ -525,12 +528,14 @@ async function exportPDF() {
       pdf.save(fileName)
       ElMessage.success('PDF 报告已导出')
     }
-  } catch (e) {
-    console.error('PDF export error:', e)
-    ElMessage.error('导出失败：' + (e?.message || '未知错误'))
-  } finally {
-    exporting.value = false
-  }
+    } catch (e) {
+      console.error('PDF export error:', e)
+      ElMessage.error('导出失败：' + (e?.message || '未知错误'))
+    } finally {
+      // 确保遮罩层一定被移除，避免异常时锁死 UI
+      if (overlay.parentNode) document.body.removeChild(overlay)
+      exporting.value = false
+    }
 }
 
 onMounted(async () => {

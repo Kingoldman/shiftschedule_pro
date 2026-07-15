@@ -123,9 +123,9 @@ def update_employee(emp_id: int, body: EmployeeUpdate, db: Session = Depends(get
         if gid is not None and not db.get(ShiftGroup, gid):
             raise HTTPException(status_code=400, detail="所选组不存在")
 
-    # 不值班时强制清除分组
+    # 不值班时强制清除分组（无论请求中是否带 group_id，与 create 逻辑保持一致）
     new_state = data.get("state", e.state)
-    if new_state == 0 and data.get("group_id") is not None:
+    if new_state == 0:
         data["group_id"] = None
 
     # 记录变更日志

@@ -23,7 +23,8 @@ const menus = computed(() =>
 const collapsed = ref(false)
 
 // ===== 登录弹窗 =====
-const loginForm = reactive({ username: 'admin', password: 'admin123' })
+// 不再硬编码默认账号密码，避免在浏览器端泄漏默认凭据
+const loginForm = reactive({ username: '', password: '' })
 const loginLoading = ref(false)
 
 function openLoginDialog() {
@@ -242,7 +243,7 @@ function handleLogout() {
         </button>
       </form>
       <div class="mt-4 text-xs text-gray-400 text-center">
-        默认账号 admin / admin123，登录后请修改密码
+        首次启动时请查看后端日志获取初始管理员密码
       </div>
     </el-dialog>
 
