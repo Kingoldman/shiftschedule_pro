@@ -45,7 +45,7 @@ python -m uvicorn app.main:app --reload --port 8000
 
 首次启动会自动：
 - 创建 SQLite 数据库 `shiftschedule.db`
-- 创建默认管理员账号：**admin / admin123**
+- 创建默认管理员账号 **admin**，密码为随机生成（或通过环境变量 `INIT_ADMIN_PASSWORD` 指定），并打印在后端启动日志中（WARNING 级别），请注意查收
 
 访问 http://127.0.0.1:8000/docs 查看 API 文档。
 
@@ -57,7 +57,7 @@ npm install
 npm run dev
 ```
 
-访问 http://localhost:5173 ，使用 admin / admin123 登录。
+访问 http://localhost:5173 ，使用后端日志中打印的初始管理员账号登录。
 
 ### 3. 生成测试数据（可选）
 
@@ -158,8 +158,8 @@ python seed.py
 
 ## 安全说明
 
-- 默认密码 `admin123` 仅用于初次登录，登录后请立即在右上角修改密码
-- JWT 密钥在 `app/core/config.py` 中，生产环境请通过环境变量覆盖
+- **初始管理员密码**：首次启动时随机生成（或通过 `INIT_ADMIN_PASSWORD` 环境变量指定），打印在后端日志中，登录后请立即在右上角修改密码
+- **SECRET_KEY**：开发环境使用内置默认值；生产环境（`DEBUG=False`）必须通过环境变量或 `.env` 设置，否则会拒绝启动
 - 所有写操作（POST/PUT/DELETE）API 均有 `Depends(get_current_admin)` 认证保护
 - 生产环境设置 `DEBUG=False` 关闭 API 文档（/docs, /redoc）
 - CORS 默认仅允许 `localhost:5173`，部署时需调整
@@ -170,10 +170,11 @@ python seed.py
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `DEBUG` | 调试模式（True 开启 /docs，False 关闭） | `True` |
+| `DEBUG` | 调试模式（True 开启 /docs，False 关闭，并强制要求 SECRET_KEY） | `True` |
 | `DATABASE_URL` | 数据库连接（默认 SQLite） | `sqlite:///./shiftschedule.db` |
-| `JWT_SECRET` | JWT 签名密钥 | 内置默认值 |
-| `CORS_ORIGINS` | 允许的前端源 | `http://localhost:5173` |
+| `SECRET_KEY` | JWT 签名密钥（生产环境必须设置） | 内置开发默认值 |
+| `INIT_ADMIN_PASSWORD` | 初始管理员密码（仅首次创建管理员时使用） | 随机生成 |
+| `CORS_ORIGINS` | 允许的前端源（JSON 数组格式） | `["http://localhost:5173","http://127.0.0.1:5173"]` |
 
 ### 部署方式
 
