@@ -86,15 +86,15 @@ function handleLogout() {
 
 <template>
   <div class="flex h-screen overflow-hidden">
-    <!-- 侧边栏：深蓝背景，与 Element Plus #409EFF 同色系，简洁不花哨 -->
+    <!-- 侧边栏：Element Plus 主色系渐变，清新明快 -->
     <aside
       class="flex flex-col text-white transition-all duration-300"
       :class="collapsed ? 'w-16' : 'w-56'"
-      style="background: #1a2a44"
+      style="background: linear-gradient(180deg, #409eff 0%, #337ecc 100%)"
     >
       <!-- Logo 区 -->
-      <div class="h-16 flex items-center gap-3 px-4" style="border-bottom: 1px solid rgba(255,255,255,0.06)">
-        <div class="w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0" style="background: #409eff">
+      <div class="h-16 flex items-center gap-3 px-4" style="border-bottom: 1px solid rgba(255,255,255,0.15)">
+        <div class="w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0" style="background: rgba(255,255,255,0.22)">
           <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2.5">
             <circle cx="12" cy="12" r="9" />
             <line x1="12" y1="12" x2="12" y2="7" stroke-linecap="round" />
@@ -103,7 +103,7 @@ function handleLogout() {
         </div>
         <div class="overflow-hidden whitespace-nowrap transition-opacity duration-200" :class="collapsed ? 'opacity-0 w-0' : 'opacity-100'">
           <div class="font-display font-semibold text-base leading-tight">隔壁小王爱值班</div>
-          <div class="text-[10px] tracking-widest uppercase" style="color: rgba(255,255,255,0.35)">Shift Schedule</div>
+          <div class="text-[10px] tracking-widest uppercase" style="color: rgba(255,255,255,0.7)">Shift Schedule</div>
         </div>
       </div>
 
@@ -122,10 +122,10 @@ function handleLogout() {
             class="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-md text-sm transition-all duration-200"
             :class="route.path === m.path
               ? 'font-medium'
-              : 'hover:bg-white/5'"
+              : 'hover:bg-white/10'"
             :style="route.path === m.path
-              ? 'background: #409eff; color: #fff'
-              : 'color: rgba(255,255,255,0.55)'"
+              ? 'background: rgba(255,255,255,0.22); color: #fff'
+              : 'color: rgba(255,255,255,0.8)'"
           >
             <el-icon class="text-base flex-shrink-0">
               <component :is="m.icon" />
@@ -136,24 +136,24 @@ function handleLogout() {
       </nav>
 
       <!-- 用户区 -->
-      <div class="border-t p-2" style="border-color: rgba(255,255,255,0.06)">
+      <div class="border-t p-2" style="border-color: rgba(255,255,255,0.15)">
         <!-- 已登录 -->
         <template v-if="auth.isLoggedIn">
           <el-tooltip :content="`${auth.admin?.username || '管理员'}（点击修改密码）`" placement="right" :disabled="!collapsed" :show-after="200">
-            <div class="flex items-center gap-2 px-2 py-2 rounded-md cursor-pointer transition-colors hover:bg-white/5" style="color: rgba(255,255,255,0.55)" @click="pwdDialogVisible = true">
-              <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0" style="background: rgba(64,158,255,0.15); color: #409eff">
+            <div class="flex items-center gap-2 px-2 py-2 rounded-md cursor-pointer transition-colors hover:bg-white/10" style="color: rgba(255,255,255,0.8)" @click="pwdDialogVisible = true">
+              <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0" style="background: rgba(255,255,255,0.22); color: #fff">
                 {{ auth.admin?.username?.[0]?.toUpperCase() || 'A' }}
               </div>
               <div class="flex-1 overflow-hidden whitespace-nowrap transition-opacity duration-200" :class="collapsed ? 'opacity-0 w-0' : 'opacity-100'">
                 <div class="text-sm text-white truncate">{{ auth.admin?.username || '管理员' }}</div>
-                <div class="text-[10px]" style="color: rgba(255,255,255,0.35)">点击修改密码</div>
+                <div class="text-[10px]" style="color: rgba(255,255,255,0.7)">点击修改密码</div>
               </div>
             </div>
           </el-tooltip>
           <el-tooltip content="退出登录" placement="right" :disabled="!collapsed" :show-after="200">
             <button
-              class="w-full mt-2 px-3 py-1.5 text-xs transition-colors flex items-center justify-center gap-1 hover:text-red-400"
-              style="color: rgba(255,255,255,0.35)"
+              class="w-full mt-2 px-3 py-1.5 text-xs transition-colors flex items-center justify-center gap-1 hover:text-red-200"
+              style="color: rgba(255,255,255,0.7)"
               @click="handleLogout"
             >
               <el-icon class="flex-shrink-0"><SwitchButton /></el-icon>
@@ -165,8 +165,8 @@ function handleLogout() {
         <template v-else>
           <el-tooltip content="管理员登录" placement="right" :disabled="!collapsed" :show-after="200">
             <button
-              class="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm transition-colors hover:bg-white/5"
-              style="color: rgba(255,255,255,0.55)"
+              class="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm transition-colors hover:bg-white/10"
+              style="color: rgba(255,255,255,0.8)"
               @click="openLoginDialog"
             >
               <el-icon class="flex-shrink-0"><User /></el-icon>

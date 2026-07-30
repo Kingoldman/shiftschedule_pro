@@ -6,12 +6,7 @@
 @layer base {
   :root {
     --color-bg: #f5f7fa;
-    --color-surface: #ffffff;
-    --color-sidebar: #1d4e89;
     --color-text: #303133;
-    --color-text-muted: #606266;
-    --color-border: #dcdfe6;
-    --color-accent: #409eff;
   }
 
   html, body, #app {
@@ -99,8 +94,6 @@
   background: #909399;
 }
 
-/* Element Plus 默认主题色（无需覆盖，保持原生 #409EFF） */
-
 .el-table .el-table__header-wrapper th {
   background-color: #f5f7fa !important;
 }
@@ -115,13 +108,13 @@
   font-weight: 600;
 }
 .fc .fc-button-primary {
-  background-color: #1d4e89 !important;
-  border-color: #1d4e89 !important;
+  background-color: #409eff !important;
+  border-color: #409eff !important;
 }
 .fc .fc-button-primary:not(:disabled).fc-button-active,
 .fc .fc-button-primary:not(:disabled):active {
-  background-color: #409eff !important;
-  border-color: #409eff !important;
+  background-color: #337ecc !important;
+  border-color: #337ecc !important;
 }
 
 /* 路由切换动画 */

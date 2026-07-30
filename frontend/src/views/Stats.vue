@@ -142,7 +142,7 @@ function nextYear() { currentYear.value++ }
 function goThisYear() { currentYear.value = dayjs().year() }
 
 function totalCount(item) { return item.total || 0 }
-const sortColors = { workday: '#10b981', weekend: '#3b82f6', holiday: '#ef4444', total: '#f59e0b', freq: '#8b5cf6' }
+const sortColors = { workday: '#10b981', weekend: '#409eff', holiday: '#ef4444', total: '#f59e0b', freq: '#8b5cf6' }
 function sortIconHtml(key) {
   if (sortKey.value !== key) return `<span style="color:#c0c4cc">⇅</span>`
   const color = sortColors[key] || '#409eff'
@@ -317,7 +317,7 @@ async function exportExcel() {
                   <button
                     v-for="opt in [
                       { value: 'workday', label: '工作日(含调休补班)', color: '#10b981' },
-                      { value: 'weekend', label: '周末', color: '#3b82f6' },
+                      { value: 'weekend', label: '周末', color: '#409eff' },
                       { value: 'holiday', label: '节假日', color: '#ef4444' },
                     ]"
                     :key="opt.value"
