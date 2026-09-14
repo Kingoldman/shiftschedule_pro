@@ -29,7 +29,12 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(data: dict[str, Any]) -> str:
-    """签发 JWT。data 中应包含 sub 字段（用户标识）。"""
+    """签发 JWT。data 中应包含 sub 字段（用户标识）。
+
+    可额外传入 tv（token_version）：记录签发时的令牌版本号。
+    管理员修改密码后版本自增，校验时版本号对不上即判定为已失效，
+    借此实现"改密后旧 Token 立即失效"（JWT 本身是无状态的，只能靠版本号）。
+    """
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES

@@ -106,19 +106,15 @@ def compute_statistics(schedule_json: list[dict]) -> dict:
     Returns:
         {
             "by_employee": [
-                {"id":1,"name":"张三","workday":5,"weekend":2,"holiday":1,"vacation":0,"total":8},
+                {"id":1,"name":"张三","workday":5,"weekend":2,"holiday":1,"total":8},
                 ...
             ],
-            "by_group": [...],
-            "by_day_type": {"workday":22,"weekend":8,"holiday":1,"vacation":0}
+            "by_day_type": {"workday":22,"weekend":8,"holiday":0}
         }
     """
     # 按员工聚合：employee_id -> {day_type -> count}
     emp_stats: dict[int, dict[str, int]] = {}
     emp_name: dict[int, str] = {}
-    # 按组聚合
-    group_stats: dict[int, dict[str, int]] = {}
-    group_name: dict[int, str] = {}
     # 按日期性质聚合（不含调休补班，统计接口已过滤）
     day_type_stats: dict[str, int] = {
         "workday": 0, "weekend": 0, "holiday": 0,
@@ -128,17 +124,6 @@ def compute_statistics(schedule_json: list[dict]) -> dict:
         day_type = item.get("day_type", "workday")
         if day_type in day_type_stats:
             day_type_stats[day_type] += 1
-
-        gid = item.get("group_id")
-        gname = item.get("group_name", "")
-        if gid is not None:
-            if gid not in group_stats:
-                group_stats[gid] = {
-                    "workday": 0, "weekend": 0, "holiday": 0, "total": 0
-                }
-                group_name[gid] = gname
-            group_stats[gid][day_type] = group_stats[gid].get(day_type, 0) + 1
-            group_stats[gid]["total"] += 1
 
         for emp in item.get("employees", []):
             eid = emp.get("id")
@@ -159,6 +144,8 @@ def compute_statistics(schedule_json: list[dict]) -> dict:
     ]
     by_employee.sort(key=lambda x: x["total"], reverse=True)
 
+    # 注：此前这里还会计算 by_group 分组统计，但从未被任何接口消费，已作为死代码移除。
+    # 若日后需要按组维度展示，可在此重新加回。
     return {
         "by_employee": by_employee,
         "by_day_type": day_type_stats,

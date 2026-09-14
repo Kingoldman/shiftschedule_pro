@@ -1,27 +1,28 @@
 """初始化服务
 
-首次启动时自动建表，并创建默认管理员账号。
+首次启动时自动建表（含轻量迁移），并创建默认管理员账号。
 默认账号：admin，密码通过 INIT_ADMIN_PASSWORD 环境变量指定，
 未设置则随机生成并打印一次到日志。
 """
 import logging
 
-from app.core.database import Base, engine, SessionLocal
+from app.core.database import SessionLocal
 from app.core.config import settings
 from app.core.security import hash_password
+from app.core.migrations import run_migrations
 from app.models.admin import Admin
 
 logger = logging.getLogger(__name__)
 
 
 def init_database() -> None:
-    """建表 + 初始化默认管理员"""
-    # 创建所有表
-    Base.metadata.create_all(bind=engine)
-
-    # 创建默认管理员（如果不存在）
+    """建表 + 轻量迁移 + 初始化默认管理员"""
     db = SessionLocal()
     try:
+        # 建新表 / 补列 / 按需重建日志表（幂等，可重复执行）
+        run_migrations(db)
+
+        # 创建默认管理员（如果不存在）
         admin = db.query(Admin).filter(Admin.username == "admin").first()
         if not admin:
             # 密码来自 settings（环境变量优先，否则启动时随机生成）
@@ -29,6 +30,7 @@ def init_database() -> None:
             admin = Admin(
                 username="admin",
                 hashed_password=hash_password(password),
+                token_version=1,
             )
             db.add(admin)
             db.commit()

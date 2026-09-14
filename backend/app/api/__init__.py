@@ -1,10 +1,11 @@
 """API 路由汇总"""
 from fastapi import APIRouter
 
-from app.api import auth, groups, employees, day_info, schedule, stats
+from app.api import auth, groups, employees, day_info, schedule, stats, me
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["认证"])
+api_router.include_router(me.router, prefix="/me", tags=["员工自助"])
 api_router.include_router(groups.router, prefix="/groups", tags=["值班组"])
 api_router.include_router(employees.router, prefix="/employees", tags=["员工"])
 api_router.include_router(day_info.router, prefix="/days", tags=["日期管理"])

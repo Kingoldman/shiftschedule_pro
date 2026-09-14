@@ -8,5 +8,16 @@ from app.models.group import ShiftGroup
 from app.models.day_info import DayInfo
 from app.models.schedule import Schedule
 from app.models.state_log import EmployeeStateLog
+from app.models.audit_log import AuditLog
+from app.models.employee_account import EmployeeAccount
 
-__all__ = ["Admin", "Employee", "ShiftGroup", "DayInfo", "Schedule", "EmployeeStateLog"]
+__all__ = [
+    "Admin",
+    "Employee",
+    "ShiftGroup",
+    "DayInfo",
+    "Schedule",
+    "EmployeeStateLog",
+    "AuditLog",
+    "EmployeeAccount",
+]

@@ -286,9 +286,21 @@ async function generateSchedule() {
       start_date: toArrange[0],
       days: toArrange,
     })
-    schedule.value = result.schedule
+    // 关键：后端只返回"本次勾选的日期性质"对应的排班。
+    // 若直接用它整体覆盖，那些没被勾选的日期（例如只重排工作日时，周末）
+    // 的既有排班就会被静默清除，而保存是整月覆盖的，数据一去不回。
+    // 因此这里保留未参与本次生成的日期，合并后按日期排序。
+    const generatedDates = new Set(result.schedule.map((x) => x.date))
+    const kept = schedule.value.filter((x) => !generatedDates.has(x.date))
+    schedule.value = [...kept, ...result.schedule].sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : 0
+    )
     hasChange.value = true
-    ElMessage.success(`已生成 ${result.schedule.length} 天排班预览`)
+    ElMessage.success(
+      kept.length > 0
+        ? `已生成 ${result.schedule.length} 天排班预览，并保留 ${kept.length} 天未参与本次生成的排班`
+        : `已生成 ${result.schedule.length} 天排班预览`
+    )
   } catch (e) { console.error('操作失败:', e) }
 }
 
@@ -309,7 +321,14 @@ async function saveSchedule() {
     await ElMessageBox.confirm('保存排班后将自动锁定，如需修改请先解锁。确认保存？', '保存确认', { type: 'warning' })
     const y = currentMonth.value.year()
     const m = currentMonth.value.month() + 1
-    await scheduleApi.save({ year: y, month: m, schedule: schedule.value })
+    // 带上读取时拿到的版本号：若期间被其他会话改过，后端返回 409，
+    // 避免两个窗口互相静默覆盖
+    await scheduleApi.save({
+      year: y,
+      month: m,
+      schedule: schedule.value,
+      expected_version: savedSchedule.value?.version ?? null,
+    })
     // 保存后自动锁定
     await scheduleApi.lock(y, m)
     hasChange.value = false
@@ -320,7 +339,15 @@ async function saveSchedule() {
     cacheMap.delete(cacheKey)
     saveCacheMap(cacheMap)
     await loadData(true)
-  } catch (e) { console.error('操作失败:', e) }
+  } catch (e) {
+    const status = e?.response?.status
+    if (status === 409) {
+      ElMessage.error('排班已被其他会话修改，已刷新为最新数据，请重新调整后再保存')
+      await loadData(true)
+    } else {
+      console.error('操作失败:', e)
+    }
+  }
 }
 
 // 取消当月值班：删除数据库中的保存记录，恢复为自动预览

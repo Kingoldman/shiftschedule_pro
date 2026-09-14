@@ -20,8 +20,14 @@ class ScheduleItem(BaseModel):
 
 
 class ScheduleItemIn(ScheduleItem):
-    """保存时的单日排班：date 用字符串，避免 datetime.date JSON 序列化报错"""
-    date: str
+    """保存时的单日排班
+
+    date 用 date 类型接收，由 Pydantic 保证格式必须是 YYYY-MM-DD。
+    此前用裸 str，传入 "2026/07/01" 之类也能入库，而统计逻辑大量依赖
+    日期字符串比较做过滤与排序，会静默出错且难以排查。
+    落库前由 API 层统一转成 isoformat 字符串。
+    """
+    date: date
 
 
 class ScheduleSave(BaseModel):
@@ -29,6 +35,10 @@ class ScheduleSave(BaseModel):
     year: int = Field(..., ge=2000, le=2100)
     month: int = Field(..., ge=1, le=12)
     schedule: list[ScheduleItemIn]
+    # 乐观锁：客户端提交时带上读到的版本号，服务端不一致则拒绝（409）
+    expected_version: int | None = Field(
+        None, description="期望的当前版本号，用于并发冲突检测"
+    )
 
 
 class ScheduleGenerate(BaseModel):
@@ -54,3 +64,4 @@ class ScheduleOut(BaseModel):
     schedule_json: list
     group_snapshot: dict | None = None
     locked: bool = False
+    version: int = 1

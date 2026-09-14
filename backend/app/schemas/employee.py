@@ -37,3 +37,36 @@ class EmployeeOut(BaseModel):
     group_id: int | None = None
     group_name: str | None = None
     created_at: datetime | None = None
+
+
+class EmployeeAccountIn(BaseModel):
+    """开通/修改员工自助账号
+
+    三个字段都可选，便于"只重置密码"或"只停用"这类局部操作。
+    """
+    username: str | None = Field(None, min_length=2, max_length=30)
+    password: str | None = Field(None, min_length=6, max_length=64)
+    is_active: bool | None = None
+
+
+class EmployeeAccountOut(BaseModel):
+    """员工账号状态"""
+    exists: bool
+    employee_id: int
+    employee_name: str | None = None
+    username: str | None = None
+    is_active: bool | None = None
+    last_login_at: datetime | None = None
+    # 日历订阅地址（相对路径，未开启时为 None）
+    feed_path: str | None = None
+    feed_updated_at: datetime | None = None
+
+
+class EmployeeFeedAction(BaseModel):
+    """管理员代为管理员工的日历订阅令牌
+
+    issue  = 首次开通（已有令牌时返回 400，避免误覆盖）
+    rotate = 重新生成，旧链接立即失效
+    revoke = 停用订阅
+    """
+    action: str = "issue"

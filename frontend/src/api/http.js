@@ -2,20 +2,19 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 
-// Axios 实例：统一 baseURL、超时、token 注入、错误处理
+// Axios 实例：统一 baseURL、超时、凭证携带、错误处理
 const http = axios.create({
   baseURL: '/api',
   timeout: 10000,
+  // 关键：允许跨域请求携带 httpOnly Cookie。
+  // 令牌已改由后端通过 Cookie 下发，不再存在 localStorage，
+  // 因此必须开启此项，浏览器才会自动附带认证信息。
+  withCredentials: true,
 })
 
-// 请求拦截：自动附加 JWT（如果有）
-http.interceptors.request.use((config) => {
-  const auth = useAuthStore()
-  if (auth.token) {
-    config.headers.Authorization = `Bearer ${auth.token}`
-  }
-  return config
-})
+// 说明：不再需要手动注入 Authorization 请求头。
+// 令牌存放在 httpOnly Cookie 中，浏览器自动携带，JS 无法读取也就无法被 XSS 窃取。
+// 后端仍兼容 Bearer 头，便于脚本或第三方调用。
 
 // 401 处理去重标志：多个并发请求同时返回 401 时，只处理一次
 let isHandling401 = false

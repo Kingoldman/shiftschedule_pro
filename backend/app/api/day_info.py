@@ -7,14 +7,35 @@ from datetime import date, timedelta
 import calendar
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_admin
 from app.models.day_info import DayInfo, DAY_TYPE_WORKDAY, DAY_TYPE_WEEKEND
+from app.models.schedule import Schedule
 from app.schemas.day_info import DayInfoBatchUpdate, DayInfoOut
 
 router = APIRouter()
+
+
+def _locked_months(db: Session, dates: list[date]) -> list[str]:
+    """找出这些日期所属的月份中，已经保存过排班的月份
+
+    已保存排班的月份日期属性必须冻结：否则改了日期性质会让历史统计失真
+    （例如把某天从工作日改成节假日，该月"工作日值班天数"的口径就变了）。
+    """
+    months = sorted({(d.year, d.month) for d in dates})
+    locked: list[str] = []
+    for y, m in months:
+        rec = (
+            db.query(Schedule)
+            .filter(Schedule.year == y, Schedule.month == m)
+            .first()
+        )
+        if rec and rec.schedule_json:
+            locked.append(f"{y}年{m}月")
+    return locked
 
 
 def _default_day_type(d: date) -> str:
@@ -24,7 +45,11 @@ def _default_day_type(d: date) -> str:
     return DAY_TYPE_WORKDAY
 
 
-@router.get("", response_model=list[DayInfoOut])
+@router.get(
+    "",
+    response_model=list[DayInfoOut],
+    dependencies=[Depends(get_current_admin)],
+)
 def list_days(
     start: date | None = Query(None, description="起始日期 YYYY-MM-DD"),
     end: date | None = Query(None, description="结束日期 YYYY-MM-DD"),
@@ -81,8 +106,23 @@ def batch_update_days(body: DayInfoBatchUpdate, db: Session = Depends(get_db)):
     """批量更新日期性质
 
     用于"框选一段日期 → 设为节假日"这样的批量操作。
+
+    注意：已保存排班的月份会被拒绝修改（日期属性冻结）。
+    前端也有同样的校验，但这里必须兜底——否则直接调 API 就能绕过，
+    让历史统计失真。
     """
     dates = [item.date for item in body.items]
+
+    locked = _locked_months(db, dates)
+    if locked:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"以下月份已保存排班，日期属性不可修改：{'、'.join(locked)}。"
+                "请先到「排班」页面取消对应月份的排班后再修改。"
+            ),
+        )
+
     existing = {
         d.date: d for d in db.query(DayInfo).filter(DayInfo.date.in_(dates)).all()
     }
@@ -98,7 +138,7 @@ def batch_update_days(body: DayInfoBatchUpdate, db: Session = Depends(get_db)):
     return {"msg": f"已更新 {len(body.items)} 条"}
 
 
-@router.get("/modified")
+@router.get("/modified", dependencies=[Depends(get_current_admin)])
 def list_modified_days(db: Session = Depends(get_db)):
     """获取所有已修改的日期（与默认状态不一致的日期）
 

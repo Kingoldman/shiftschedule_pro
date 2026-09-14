@@ -6,7 +6,7 @@ import draggable from 'vuedraggable'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
 import { useStaffStore } from '@/stores/staff'
-import { groupApi, employeeApi } from '@/api/staff'
+import { groupApi, employeeApi, accountApi } from '@/api/staff'
 import { useAuthStore } from '@/stores/auth'
 import { parseDateStr } from '@/utils/format'
 
@@ -47,10 +47,159 @@ const unassignedCount = computed(() =>
   employees.value.filter((e) => !e.group_id || e.state === 0).length
 )
 
+// ===== 员工自助账号 =====
+// employee_id -> { username, is_active, last_login_at }
+const accountMap = ref({})
+
+async function loadAccounts() {
+  try {
+    const list = await accountApi.list()
+    const map = {}
+    for (const a of list || []) map[a.employee_id] = a
+    accountMap.value = map
+  } catch {
+    accountMap.value = {}
+  }
+}
+
+function accountOf(empId) {
+  return accountMap.value[empId] || null
+}
+
+const accDialogVisible = ref(false)
+const accSaving = ref(false)
+const accTarget = ref(null)
+const accForm = ref({ username: '', password: '', is_active: true })
+
+// ===== 日历订阅（管理员代管） =====
+const accFeed = ref({ feed_path: null, feed_updated_at: null })
+const accFeedBusy = ref(false)
+
+async function openAccountDialog(row) {
+  accTarget.value = row
+  const existing = accountOf(row.id)
+  accForm.value = {
+    username: existing?.username || '',
+    password: '',
+    is_active: existing ? existing.is_active : true,
+  }
+  accFeed.value = { feed_path: null, feed_updated_at: null }
+  accDialogVisible.value = true
+  if (existing) await loadAccountFeed(row.id)
+}
+
+async function loadAccountFeed(empId) {
+  try {
+    const data = await accountApi.get(empId)
+    accFeed.value = {
+      feed_path: data?.feed_path || null,
+      feed_updated_at: data?.feed_updated_at || null,
+    }
+  } catch {
+    accFeed.value = { feed_path: null, feed_updated_at: null }
+  }
+}
+
+const accFeedUrl = computed(() =>
+  accFeed.value.feed_path ? window.location.origin + accFeed.value.feed_path : ''
+)
+
+async function copyAccFeed() {
+  try {
+    await navigator.clipboard.writeText(accFeedUrl.value)
+    ElMessage.success('订阅地址已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选中地址复制')
+  }
+}
+
+async function accFeedAction(action) {
+  const row = accTarget.value
+  if (!row) return
+  if (action === 'rotate') {
+    try {
+      await ElMessageBox.confirm(
+        '重新生成后旧地址立即失效，已订阅的日历需重新添加。确定继续？',
+        '重新生成订阅地址',
+        { type: 'warning', confirmButtonText: '重新生成', cancelButtonText: '取消' }
+      )
+    } catch {
+      return
+    }
+  }
+  accFeedBusy.value = true
+  try {
+    const data = await accountApi.feedToken(row.id, action)
+    accFeed.value = {
+      feed_path: data?.feed_path || null,
+      feed_updated_at: data?.feed_updated_at || null,
+    }
+    ElMessage.success(data?.msg || '操作成功')
+  } catch (e) {
+    console.error('操作失败:', e)
+  } finally {
+    accFeedBusy.value = false
+  }
+}
+
+async function saveAccount() {
+  const row = accTarget.value
+  if (!row) return
+  const existing = accountOf(row.id)
+  if (!existing && (!accForm.value.username.trim() || !accForm.value.password)) {
+    ElMessage.warning('首次开通需填写用户名和密码')
+    return
+  }
+  if (!existing && accForm.value.password.length < 6) {
+    ElMessage.warning('密码至少 6 位')
+    return
+  }
+  if (existing && accForm.value.password && accForm.value.password.length < 6) {
+    ElMessage.warning('密码至少 6 位')
+    return
+  }
+  accSaving.value = true
+  try {
+    const payload = { username: accForm.value.username.trim(), is_active: accForm.value.is_active }
+    if (accForm.value.password) payload.password = accForm.value.password
+    await accountApi.upsert(row.id, payload)
+    ElMessage.success(existing ? '账号已更新' : '账号已开通')
+    accDialogVisible.value = false
+    await loadAccounts()
+  } catch (e) {
+    console.error('操作失败:', e)
+  } finally {
+    accSaving.value = false
+  }
+}
+
+async function removeAccount() {
+  const row = accTarget.value
+  if (!row) return
+  try {
+    await ElMessageBox.confirm(
+      `确定注销「${row.name}」的自助账号？其值班记录不受影响。`,
+      '注销账号',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await accountApi.remove(row.id)
+    ElMessage.success('账号已注销')
+    accDialogVisible.value = false
+    await loadAccounts()
+  } catch (e) {
+    console.error('操作失败:', e)
+  }
+}
+
 async function loadData() {
   loading.value = true
   try {
     await staffStore.loadAll()
+    await loadAccounts()
   } finally {
     loading.value = false
   }
@@ -61,6 +210,7 @@ async function refreshData() {
   loading.value = true
   try {
     await staffStore.refresh()
+    await loadAccounts()
   } finally {
     loading.value = false
   }
@@ -832,8 +982,29 @@ async function confirmImport() {
             </span>
           </template>
         </el-table-column>
-        <el-table-column v-if="canEdit" label="操作" min-width="140" align="right">
+        <el-table-column v-if="canEdit" label="自助账号" min-width="130" align="center">
           <template #default="{ row }">
+            <button
+              class="px-2 py-0.5 rounded text-xs font-medium transition-colors"
+              :class="accountOf(row.id)
+                ? (accountOf(row.id).is_active
+                  ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200')
+                : 'bg-gray-50 text-gray-400 border border-dashed border-gray-300 hover:bg-gray-100'"
+              @click="openAccountDialog(row)"
+            >
+              <template v-if="accountOf(row.id)">
+                {{ accountOf(row.id).is_active ? accountOf(row.id).username : '已停用' }}
+              </template>
+              <template v-else>未开通</template>
+            </button>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canEdit" label="操作" min-width="180" align="right">
+          <template #default="{ row }">
+            <el-button text size="small" @click="openAccountDialog(row)">
+              <el-icon><Key /></el-icon>账号
+            </el-button>
             <el-button text size="small" @click="openEmpDialog(row)">
               <el-icon><Edit /></el-icon>编辑
             </el-button>
@@ -901,6 +1072,76 @@ async function confirmImport() {
       <template #footer>
         <button class="btn-ghost" @click="empDialogVisible = false">取消</button>
         <button class="btn-primary ml-2" @click="saveEmp">保存</button>
+      </template>
+    </el-dialog>
+
+    <!-- 员工自助账号弹窗 -->
+    <el-dialog
+      v-model="accDialogVisible"
+      :title="accTarget ? `自助账号 · ${accTarget.name}` : '自助账号'"
+      width="440px"
+    >
+      <el-form label-width="90px">
+        <el-form-item label="登录账号" required>
+          <el-input v-model="accForm.username" placeholder="用于员工登录，2-30 位" />
+        </el-form-item>
+        <el-form-item label="登录密码">
+          <el-input
+            v-model="accForm.password"
+            type="password"
+            show-password
+            :placeholder="accountOf(accTarget?.id) ? '留空表示不修改密码' : '至少 6 位'"
+          />
+        </el-form-item>
+        <el-form-item label="启用登录">
+          <el-switch v-model="accForm.is_active" />
+        </el-form-item>
+        <el-form-item v-if="accountOf(accTarget?.id)" label="日历订阅">
+          <div class="w-full">
+            <div v-if="accFeed.feed_path" class="space-y-2">
+              <el-input :model-value="accFeedUrl" readonly size="small">
+                <template #append>
+                  <button class="px-2 text-blue-600" @click="copyAccFeed">复制</button>
+                </template>
+              </el-input>
+              <div class="flex items-center gap-2 flex-wrap">
+                <button class="btn-ghost text-xs" :disabled="accFeedBusy" @click="accFeedAction('rotate')">
+                  <el-icon><Refresh /></el-icon>重新生成
+                </button>
+                <button class="btn-ghost text-xs text-red-500" :disabled="accFeedBusy" @click="accFeedAction('revoke')">
+                  <el-icon><CircleClose /></el-icon>停用
+                </button>
+                <span v-if="accFeed.feed_updated_at" class="text-xs text-gray-400">
+                  {{ accFeed.feed_updated_at.replace('T', ' ').slice(0, 16) }}
+                </span>
+              </div>
+            </div>
+            <div v-else class="flex items-center gap-2 flex-wrap">
+              <span class="text-xs text-gray-400">尚未开启，员工可在「我的值班」页自行开启</span>
+              <button class="btn-ghost text-xs" :disabled="accFeedBusy" @click="accFeedAction('issue')">
+                <el-icon><Calendar /></el-icon>代为生成
+              </button>
+            </div>
+          </div>
+        </el-form-item>
+      </el-form>
+      <div class="text-xs text-gray-400 -mt-2 mb-2 pl-2">
+        员工账号只能查看本人值班安排，无法进入排班与统计页面。
+        重置密码会使其已登录的会话立即失效。
+        订阅地址含个人密钥，转发即等于公开其班表。
+      </div>
+      <template #footer>
+        <button
+          v-if="accountOf(accTarget?.id)"
+          class="btn-danger mr-auto"
+          @click="removeAccount"
+        >
+          <el-icon><Delete /></el-icon>注销账号
+        </button>
+        <button class="btn-ghost" @click="accDialogVisible = false">取消</button>
+        <button class="btn-primary ml-2" :disabled="accSaving" @click="saveAccount">
+          {{ accSaving ? '保存中...' : '保存' }}
+        </button>
       </template>
     </el-dialog>
 

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.deps import CurrentUser, assert_admin_or_self, get_current_admin, get_current_user
 from app.models.schedule import Schedule
 from app.services.schedule_service import compute_statistics, compute_eligible_days
 
@@ -41,26 +42,31 @@ def _normalize_day_type(item: dict) -> dict:
     return item
 
 
-def _collect_schedule_data(db: Session, start: date, end: date) -> list[dict]:
-    """收集时间范围内的排班数据，调休补班合并到工作日"""
-    records = (
-        db.query(Schedule)
-        .filter(
-            (Schedule.year * 100 + Schedule.month) >= (start.year * 100 + start.month),
-            (Schedule.year * 100 + Schedule.month) <= (end.year * 100 + end.month),
-        )
-        .all()
-    )
-    all_items = []
+def _collect_items_in_range(
+    records: list[Schedule],
+    start: date | None = None,
+    end: date | None = None,
+) -> list[dict]:
+    """从排班记录中收集指定区间内的条目，并把调休补班归一为工作日
+
+    此前 yearly / custom / cumulative 三个接口各自内联了几乎相同的
+    遍历与过滤逻辑（含一个从未被调用的 _collect_schedule_data），
+    这里统一收敛成一个函数。start/end 传 None 表示不限制。
+    """
+    start_str = start.isoformat() if start else None
+    end_str = end.isoformat() if end else None
+    items: list[dict] = []
     for record in records:
         for item in record.schedule_json:
             item_date = item.get("date", "")
-            if item_date < start.isoformat() or item_date > end.isoformat():
+            if start_str and item_date < start_str:
+                continue
+            if end_str and item_date > end_str:
                 continue
             if item.get("day_type") not in STAT_DAY_TYPES:
                 continue
-            all_items.append(_normalize_day_type(item))
-    return all_items
+            items.append(_normalize_day_type(item))
+    return items
 
 
 def _collect_schedule_records(db: Session, start: date, end: date) -> list[Schedule]:
@@ -161,7 +167,7 @@ def _enrich_with_eligible_multi(
     return result
 
 
-@router.get("/monthly/{year}/{month}")
+@router.get("/monthly/{year}/{month}", dependencies=[Depends(get_current_admin)])
 def get_monthly_stats(year: int, month: int, db: Session = Depends(get_db)):
     """获取某月排班统计"""
     cache_key = f"monthly_{year}_{month}"
@@ -192,21 +198,13 @@ def get_monthly_stats(year: int, month: int, db: Session = Depends(get_db)):
     return result
 
 
-@router.get("/yearly/{year}")
+@router.get("/yearly/{year}", dependencies=[Depends(get_current_admin)])
 def get_yearly_stats(year: int, db: Session = Depends(get_db)):
     """获取某年排班统计"""
     start = date(year, 1, 1)
     end = date(year, 12, 31)
     records = _collect_schedule_records(db, start, end)
-    all_items = []
-    for record in records:
-        for item in record.schedule_json:
-            item_date = item.get("date", "")
-            if item_date < start.isoformat() or item_date > end.isoformat():
-                continue
-            if item.get("day_type") not in STAT_DAY_TYPES:
-                continue
-            all_items.append(_normalize_day_type(item))
+    all_items = _collect_items_in_range(records, start, end)
     if not all_items:
         return {"by_employee": [], "by_day_type": {
             "workday": 0, "weekend": 0, "holiday": 0,
@@ -218,7 +216,7 @@ def get_yearly_stats(year: int, db: Session = Depends(get_db)):
     return result
 
 
-@router.get("/custom")
+@router.get("/custom", dependencies=[Depends(get_current_admin)])
 def get_custom_stats(
     start_date: date = Query(..., description="起始日期"),
     end_date: date = Query(..., description="结束日期"),
@@ -230,15 +228,7 @@ def get_custom_stats(
             "workday": 0, "weekend": 0, "holiday": 0,
         }, "total_days": 0, "period_label": "无效区间"}
     records = _collect_schedule_records(db, start_date, end_date)
-    all_items = []
-    for record in records:
-        for item in record.schedule_json:
-            item_date = item.get("date", "")
-            if item_date < start_date.isoformat() or item_date > end_date.isoformat():
-                continue
-            if item.get("day_type") not in STAT_DAY_TYPES:
-                continue
-            all_items.append(_normalize_day_type(item))
+    all_items = _collect_items_in_range(records, start_date, end_date)
     if not all_items:
         return {"by_employee": [], "by_day_type": {
             "workday": 0, "weekend": 0, "holiday": 0,
@@ -250,7 +240,7 @@ def get_custom_stats(
     return result
 
 
-@router.get("/cumulative")
+@router.get("/cumulative", dependencies=[Depends(get_current_admin)])
 def get_cumulative_stats(db: Session = Depends(get_db)):
     """累计统计（所有已保存的排班）"""
     records = (
@@ -258,11 +248,7 @@ def get_cumulative_stats(db: Session = Depends(get_db)):
         .order_by(Schedule.year.asc(), Schedule.month.asc())
         .all()
     )
-    all_items = []
-    for record in records:
-        for item in record.schedule_json:
-            if item.get("day_type") in STAT_DAY_TYPES:
-                all_items.append(_normalize_day_type(item))
+    all_items = _collect_items_in_range(records)
 
     if not all_items:
         return {"by_employee": [], "by_day_type": {
@@ -283,7 +269,7 @@ def get_cumulative_stats(db: Session = Depends(get_db)):
     return result
 
 
-@router.get("/employees-with-history")
+@router.get("/employees-with-history", dependencies=[Depends(get_current_admin)])
 def get_employees_with_history(db: Session = Depends(get_db)):
     """获取所有曾参与值班的人员列表（包括已删除的）
 
@@ -337,9 +323,16 @@ def get_employees_with_history(db: Session = Depends(get_db)):
 @router.get("/employee/{employee_id}")
 def get_employee_stats(
     employee_id: int,
+    current: CurrentUser = Depends(get_current_user),
     mode: str = Query("cumulative", description="统计模式: monthly/yearly/cumulative"),
     year: int | None = Query(None, description="年份"),
     month: int | None = Query(None, description="月份(1-12)"),
+    duty_page: int | None = Query(
+        None, ge=1, description="值班记录页码；不传则返回全部（导出 PDF 需要全量）"
+    ),
+    duty_page_size: int | None = Query(
+        None, ge=1, le=200, description="值班记录每页条数；需与 duty_page 同时使用"
+    ),
     db: Session = Depends(get_db),
 ):
     """单个员工的值班统计分析
@@ -355,9 +348,13 @@ def get_employee_stats(
     mode 支持 monthly(需year+month)/yearly(需year)/cumulative(全部)。
     每月数据使用该记录的 group_snapshot 计算 eligible_days，
     确保历史统计不受后续人员/组变动影响。
+
+    权限：管理员可查任意员工；员工账号只能查自己（越权返回 403）。
     """
     from app.models.employee import Employee
     from app.models.group import ShiftGroup
+
+    assert_admin_or_self(current, employee_id)
 
     # 转换模式为日期范围
     if mode == "monthly":
@@ -559,12 +556,22 @@ def get_employee_stats(
             return f"{y}年{int(mo)}月"
         period_range = f"{fmt(first_month)}—{fmt(last_month)}"
 
+    # 值班记录明细分页：概览与月度趋势始终基于全量统计，
+    # 只有明细列表切片。导出 PDF 时不传分页参数，即可拿到全部记录。
+    duty_total = len(recent_duties)
+    if duty_page is not None and duty_page_size is not None:
+        offset = (duty_page - 1) * duty_page_size
+        paged_duties = recent_duties[offset:offset + duty_page_size]
+    else:
+        paged_duties = recent_duties
+
     return {
         "employee": employee_info,
         "overview": overview,
         "monthly_trend": monthly_trend,
         "day_type_distribution": day_type_distribution,
-        "all_duties": recent_duties,
+        "all_duties": paged_duties,
+        "duty_total": duty_total,
         "duty_days": duty_days,
         "period_range": period_range,
     }

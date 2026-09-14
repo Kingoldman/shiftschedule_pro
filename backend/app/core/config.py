@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     # 初始管理员密码（首次启动创建管理员时使用）
     INIT_ADMIN_PASSWORD: str = _DEFAULT_ADMIN_PASSWORD
 
+    # 认证 Cookie 配置：JWT 存放于 httpOnly Cookie，避免被 JS/XSS 读取
+    AUTH_COOKIE_NAME: str = "shift_token"
+    # 仅 HTTPS 传输。本地 http 开发必须 False；公网 HTTPS 部署建议设为 True
+    AUTH_COOKIE_SECURE: bool = False
+    # Cookie 有效期（秒），与 token 有效期保持一致：7 天
+    AUTH_COOKIE_MAX_AGE: int = 60 * 60 * 24 * 7
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 

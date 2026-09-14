@@ -19,3 +19,25 @@ export const employeeApi = {
   remove: (id) => http.delete(`/employees/${id}`),
   batchSort: (items) => http.put('/employees/batch/sort', { items }),
 }
+
+// 员工自助账号 API（管理员操作）
+export const accountApi = {
+  // 批量查询所有员工账号状态（避免列表页 N+1 请求）
+  list: () => http.get('/employees/accounts'),
+  get: (empId) => http.get(`/employees/${empId}/account`),
+  upsert: (empId, data) => http.put(`/employees/${empId}/account`, data),
+  remove: (empId) => http.delete(`/employees/${empId}/account`),
+  // action: issue | rotate | revoke
+  feedToken: (empId, action) =>
+    http.post(`/employees/${empId}/account/feed-token`, { action }),
+}
+
+// 员工自助 API（仅返回本人数据）
+export const meApi = {
+  months: () => http.get('/me/months'),
+  schedule: (year, month) => http.get(`/me/schedule/${year}/${month}`),
+  // 日历订阅
+  feedUrl: () => http.get('/me/feed-url'),
+  rotateFeed: () => http.post('/me/feed-url/rotate'),
+  revokeFeed: () => http.post('/me/feed-url/revoke'),
+}

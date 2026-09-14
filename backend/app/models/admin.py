@@ -5,7 +5,7 @@
 """
 from datetime import datetime
 
-from sqlalchemy import String, DateTime, func
+from sqlalchemy import String, DateTime, Integer, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -17,6 +17,9 @@ class Admin(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(30), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
+    # 令牌版本号：修改密码时 +1，使此前签发的所有 JWT 立即失效
+    # （JWT 本身无状态，只能靠版本号实现"改密踢下线"）
+    token_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp()
     )

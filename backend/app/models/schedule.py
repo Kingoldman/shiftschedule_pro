@@ -40,6 +40,9 @@ class Schedule(Base):
     group_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # 锁定标志：True 时不允许修改排班
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 乐观锁版本号：每次保存 +1。客户端提交 expected_version，
+    # 与库中不一致说明期间被他人改过，返回 409 避免静默覆盖
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp()
     )

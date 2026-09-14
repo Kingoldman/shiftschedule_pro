@@ -418,6 +418,18 @@ async function exportPDF() {
     const now = dayjs().format("YYYY-MM-DD HH:mm");
     const genDate = now.split(" ")[0];
 
+    // HTML 转义：姓名、组名等字段来自用户输入，而下面是通过 innerHTML 拼装
+    // PDF 内容。若不转义，把姓名改成 <img src=x onerror=...> 就能在查看报告时
+    // 执行任意脚本（存储型 XSS）。所有动态字段都必须过一遍 esc()。
+    const esc = (v) =>
+      String(v ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[c]);
+
     const ovFreqFormula = (type) => {
       const map = {
         workday: { eligible: "eligible_workday", count: "workday" },
@@ -475,7 +487,7 @@ async function exportPDF() {
         const hf = calcFreqAndFormula(m, "holiday"),
           tf = calcFreqAndFormula(m, "total");
         return `<tr>
-        <td style="padding:4px 3px;border:1px solid #e5e7eb;text-align:center">${m.month}</td><td style="padding:4px 3px;border:1px solid #e5e7eb;text-align:center">${m.workday || 0}</td>
+        <td style="padding:4px 3px;border:1px solid #e5e7eb;text-align:center">${esc(m.month)}</td><td style="padding:4px 3px;border:1px solid #e5e7eb;text-align:center">${m.workday || 0}</td>
         <td style="padding:4px 3px;border:1px solid #e5e7eb;text-align:center;color:#059669;font-weight:bold">${wf.freq}<br/><span style="font-size:10px;color:#9ca3af;font-weight:normal">${wf.formula}</span></td>
         <td style="padding:4px 3px;border:1px solid #e5e7eb;text-align:center">${m.weekend || 0}</td>
         <td style="padding:4px 3px;border:1px solid #e5e7eb;text-align:center;color:#409eff;font-weight:bold">${wef.freq}<br/><span style="font-size:10px;color:#9ca3af;font-weight:normal">${wef.formula}</span></td>
@@ -491,10 +503,10 @@ async function exportPDF() {
       a.date.localeCompare(b.date),
     );
     const renderDutyRow = (d) => `<tr>
-      <td style="padding:3px 6px;border:1px solid #e5e7eb;text-align:center">${d.date}</td>
-      <td style="padding:3px 6px;border:1px solid #e5e7eb;text-align:center">${dayTypeMap[d.day_type] || d.day_type}</td>
-      <td style="padding:3px 6px;border:1px solid #e5e7eb">${d.group_name || "-"}</td>
-      <td style="padding:3px 6px;border:1px solid #e5e7eb">${d.coworkers?.length ? d.coworkers.join("、") : "单独值班"}</td>
+      <td style="padding:3px 6px;border:1px solid #e5e7eb;text-align:center">${esc(d.date)}</td>
+      <td style="padding:3px 6px;border:1px solid #e5e7eb;text-align:center">${esc(dayTypeMap[d.day_type] || d.day_type)}</td>
+      <td style="padding:3px 6px;border:1px solid #e5e7eb">${esc(d.group_name || "-")}</td>
+      <td style="padding:3px 6px;border:1px solid #e5e7eb">${d.coworkers?.length ? esc(d.coworkers.join("、")) : "单独值班"}</td>
     </tr>`;
     const dutyHeaderHtml = `<thead><tr style="background:#f9fafb">
       <th style="padding:4px 6px;border:1px solid #e5e7eb;text-align:center">日期</th>
@@ -516,8 +528,8 @@ async function exportPDF() {
           <div style="font-size:11px;color:#6b7280">生成时间：${now}</div>
         </div>
         <table style="width:100%;font-size:13px;margin-bottom:0;border-collapse:collapse">
-          <tr><td style="background:#f3f4f6;padding:5px 10px;width:90px;font-weight:bold">姓名</td><td style="padding:5px 10px">${emp.name || "-"}</td><td style="background:#f3f4f6;padding:5px 10px;width:90px;font-weight:bold">状态</td><td style="padding:5px 10px">${stateText(emp.state)}</td></tr>
-          <tr><td style="background:#f3f4f6;padding:5px 10px;font-weight:bold">所属组</td><td style="padding:5px 10px">${emp.group_name || "未分组"}</td><td style="background:#f3f4f6;padding:5px 10px;font-weight:bold">统计区间</td><td style="padding:5px 10px">${periodLabel.value}</td></tr>
+          <tr><td style="background:#f3f4f6;padding:5px 10px;width:90px;font-weight:bold">姓名</td><td style="padding:5px 10px">${esc(emp.name || "-")}</td><td style="background:#f3f4f6;padding:5px 10px;width:90px;font-weight:bold">状态</td><td style="padding:5px 10px">${esc(stateText(emp.state))}</td></tr>
+          <tr><td style="background:#f3f4f6;padding:5px 10px;font-weight:bold">所属组</td><td style="padding:5px 10px">${esc(emp.group_name || "未分组")}</td><td style="background:#f3f4f6;padding:5px 10px;font-weight:bold">统计区间</td><td style="padding:5px 10px">${esc(periodLabel.value)}</td></tr>
         </table>
       </div>`,
       // 2. 概览统计卡片

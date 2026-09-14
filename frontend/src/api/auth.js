@@ -6,4 +6,6 @@ export const authApi = {
   getMe: () => http.get('/auth/me'),
   changePassword: (oldPassword, newPassword) =>
     http.post('/auth/change-password', { old_password: oldPassword, new_password: newPassword }),
+  // 退出登录：让后端清除 httpOnly Cookie
+  logout: () => http.post('/auth/logout'),
 }

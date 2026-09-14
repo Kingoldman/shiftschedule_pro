@@ -8,11 +8,14 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
-// 侧边栏菜单：从路由 meta 生成
+// 侧边栏菜单：从路由 meta 生成，并按当前角色过滤。
+// 未登录时按 admin 渲染（此时守卫已弹出登录框，用户看不到这个中间态）。
+const currentRole = computed(() => (auth.isLoggedIn ? auth.role : 'admin'))
 const menus = computed(() =>
   router.options.routes
     .find((r) => r.path === '/')
-    .children.map((r) => ({
+    .children.filter((r) => !r.meta.roles || r.meta.roles.includes(currentRole.value))
+    .map((r) => ({
       path: `/${r.path}`,
       name: r.name,
       title: r.meta.title,
@@ -41,10 +44,15 @@ async function handleLogin() {
     await auth.login(loginForm.username, loginForm.password)
     ElMessage.success('登录成功')
     auth.loginDialogVisible = false
+    loginForm.password = ''
+    // 登录后落到该角色能看的第一个页面
+    router.push(auth.isEmployee ? '/my' : '/schedule')
   } catch (e) {
     const status = e?.response?.status
     if (status === 401) {
       ElMessage.error('账号或密码错误')
+    } else if (status === 403) {
+      ElMessage.error('账号已停用，请联系管理员')
     }
   } finally {
     loginLoading.value = false
@@ -139,13 +147,23 @@ function handleLogout() {
       <div class="border-t p-2" style="border-color: rgba(255,255,255,0.15)">
         <!-- 已登录 -->
         <template v-if="auth.isLoggedIn">
-          <el-tooltip :content="`${auth.admin?.username || '管理员'}（点击修改密码）`" placement="right" :disabled="!collapsed" :show-after="200">
+          <el-tooltip :content="`${auth.user?.username || ''}（点击修改密码）`" placement="right" :disabled="!collapsed" :show-after="200">
             <div class="flex items-center gap-2 px-2 py-2 rounded-md cursor-pointer transition-colors hover:bg-white/10" style="color: rgba(255,255,255,0.8)" @click="pwdDialogVisible = true">
               <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0" style="background: rgba(255,255,255,0.22); color: #fff">
-                {{ auth.admin?.username?.[0]?.toUpperCase() || 'A' }}
+                {{ auth.user?.username?.[0]?.toUpperCase() || 'A' }}
               </div>
               <div class="flex-1 overflow-hidden whitespace-nowrap transition-opacity duration-200" :class="collapsed ? 'opacity-0 w-0' : 'opacity-100'">
-                <div class="text-sm text-white truncate">{{ auth.admin?.username || '管理员' }}</div>
+                <div class="flex items-center gap-1.5">
+                  <span class="text-sm text-white truncate">{{ auth.user?.username || '-' }}</span>
+                  <span
+                    class="px-1.5 py-px rounded text-[10px] font-medium flex-shrink-0"
+                    :style="auth.isAdmin
+                      ? 'background: rgba(255,255,255,0.25); color: #fff'
+                      : 'background: rgba(255,255,255,0.18); color: #fff'"
+                  >
+                    {{ auth.isAdmin ? '管理员' : '员工' }}
+                  </span>
+                </div>
                 <div class="text-[10px]" style="color: rgba(255,255,255,0.7)">点击修改密码</div>
               </div>
             </div>
@@ -163,14 +181,14 @@ function handleLogout() {
         </template>
         <!-- 未登录：打开登录弹窗 -->
         <template v-else>
-          <el-tooltip content="管理员登录" placement="right" :disabled="!collapsed" :show-after="200">
+          <el-tooltip content="登录" placement="right" :disabled="!collapsed" :show-after="200">
             <button
               class="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm transition-colors hover:bg-white/10"
               style="color: rgba(255,255,255,0.8)"
               @click="openLoginDialog"
             >
               <el-icon class="flex-shrink-0"><User /></el-icon>
-              <span class="whitespace-nowrap transition-opacity duration-200" :class="collapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'">管理员登录</span>
+              <span class="whitespace-nowrap transition-opacity duration-200" :class="collapsed ? 'opacity-0 w-0 overflow-hidden' : 'opacity-100'">登录</span>
             </button>
           </el-tooltip>
         </template>
@@ -197,7 +215,7 @@ function handleLogout() {
         </div>
         <div class="flex items-center gap-4">
           <span v-if="!auth.isLoggedIn" class="text-xs text-gray-400">
-            未登录 · 仅可查看
+            未登录 · 请先登录后再查看数据
           </span>
           <span class="text-xs text-gray-400 font-mono tracking-wider">
             {{ new Date().toLocaleDateString('zh-CN', { weekday: 'long' }) }}
@@ -216,7 +234,7 @@ function handleLogout() {
     </div>
 
     <!-- 登录弹窗 -->
-    <el-dialog v-model="auth.loginDialogVisible" title="管理员登录" width="400px">
+    <el-dialog v-model="auth.loginDialogVisible" title="登录" width="400px">
       <form @submit.prevent="handleLogin" class="space-y-4">
         <div>
           <label class="block text-xs font-medium text-gray-600 mb-1.5">用户名</label>
@@ -243,7 +261,7 @@ function handleLogout() {
         </button>
       </form>
       <div class="mt-4 text-xs text-gray-400 text-center">
-        首次启动时请查看后端日志获取初始管理员密码
+        管理员账号用于排班管理，员工账号只能查看本人值班安排
       </div>
     </el-dialog>
 

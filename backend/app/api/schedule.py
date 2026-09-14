@@ -5,15 +5,37 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_admin
+from app.models.admin import Admin
 from app.models.schedule import Schedule
 from app.models.group import ShiftGroup
 from app.models.employee import Employee
 from app.models.state_log import EmployeeStateLog
+from app.models.audit_log import AuditLog
 from app.services.schedule_service import generate_schedule
 from app.api.stats import clear_stats_cache
 from app.schemas.schedule import ScheduleSave, ScheduleOut, ScheduleGenerate
 
 router = APIRouter()
+
+
+def _add_audit(
+    db: Session,
+    current: Admin | None,
+    action: str,
+    target_id: str = "",
+    detail: str | None = None,
+    target_type: str = "schedule",
+) -> None:
+    """记录一条操作审计日志"""
+    db.add(
+        AuditLog(
+            actor=current.username if current else "",
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            detail=detail,
+        )
+    )
 
 
 @router.post("/generate", dependencies=[Depends(get_current_admin)])
@@ -30,7 +52,10 @@ def generate(body: ScheduleGenerate, db: Session = Depends(get_db)):
     return {"schedule": result}
 
 
-@router.get("/auto-preview/{year}/{month}")
+@router.get(
+    "/auto-preview/{year}/{month}",
+    dependencies=[Depends(get_current_admin)],
+)
 def auto_preview(year: int, month: int, db: Session = Depends(get_db)):
     """自动预览排班
 
@@ -136,7 +161,11 @@ def auto_preview(year: int, month: int, db: Session = Depends(get_db)):
     return {"schedule": result, "start_group_id": start_group_id}
 
 
-@router.get("/{year}/{month}", response_model=ScheduleOut | None)
+@router.get(
+    "/{year}/{month}",
+    response_model=ScheduleOut | None,
+    dependencies=[Depends(get_current_admin)],
+)
 def get_schedule(year: int, month: int, db: Session = Depends(get_db)):
     """获取某月排班数据。不存在返回 null，前端按 null 显示"未排班"。"""
     return (
@@ -171,29 +200,38 @@ def _build_group_snapshot(db: Session, year: int = None, month: int = None) -> d
             ],
         })
 
-    # 获取变更日志：只取上次保存之后的
-    log_query = db.query(EmployeeStateLog).order_by(EmployeeStateLog.changed_at.asc())
+    # 获取变更日志：只取上次保存之后新增的
+    log_query = db.query(EmployeeStateLog).order_by(EmployeeStateLog.id.asc())
+    last_log_id: int | None = None
     if year and month:
-        # 找到上一次保存的快照时间，只取之后的日志
         prev_record = (
             db.query(Schedule)
             .filter(Schedule.year == year, Schedule.month == month)
             .first()
         )
         if prev_record and prev_record.group_snapshot:
-            # 取上次快照中最后一条日志的时间
-            prev_logs = prev_record.group_snapshot.get("state_logs", [])
-            if prev_logs:
-                last_log_time = prev_logs[-1].get("changed_at")
-                if last_log_time:
-                    from datetime import datetime as dt
-                    log_query = log_query.filter(
-                        EmployeeStateLog.changed_at > dt.fromisoformat(last_log_time)
-                    )
+            snapshot = prev_record.group_snapshot
+            # 优先按日志自增 id 取增量。
+            # 原先按 changed_at 时间戳取 ">" 过滤，会漏掉同一秒内产生的日志
+            # （批量导入/批量排序往往一秒内写入多条），导致留档不完整。
+            last_log_id = snapshot.get("last_log_id")
+            if last_log_id:
+                log_query = log_query.filter(EmployeeStateLog.id > last_log_id)
+            else:
+                # 兼容早期没有 last_log_id 的旧快照，回退到时间戳过滤
+                prev_logs = snapshot.get("state_logs", [])
+                if prev_logs:
+                    last_log_time = prev_logs[-1].get("changed_at")
+                    if last_log_time:
+                        from datetime import datetime as dt
+                        log_query = log_query.filter(
+                            EmployeeStateLog.changed_at > dt.fromisoformat(last_log_time)
+                        )
 
     logs = log_query.all()
     logs_data = [
         {
+            "id": log.id,
             "employee_id": log.employee_id,
             "employee_name": log.employee_name,
             "old_state": log.old_state,
@@ -202,8 +240,14 @@ def _build_group_snapshot(db: Session, year: int = None, month: int = None) -> d
         }
         for log in logs
     ]
+    if logs_data:
+        last_log_id = logs_data[-1]["id"]
 
-    return {"groups": groups_data, "state_logs": logs_data}
+    return {
+        "groups": groups_data,
+        "state_logs": logs_data,
+        "last_log_id": last_log_id,
+    }
 
 
 def _fill_employees(schedule_data: list[dict], db: Session) -> list[dict]:
@@ -222,12 +266,20 @@ def _fill_employees(schedule_data: list[dict], db: Session) -> list[dict]:
     return schedule_data
 
 
-@router.post("/save", response_model=ScheduleOut, dependencies=[Depends(get_current_admin)])
-def save_schedule(body: ScheduleSave, db: Session = Depends(get_db)):
+@router.post("/save", response_model=ScheduleOut)
+def save_schedule(
+    body: ScheduleSave,
+    current: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
     """保存月度排班（覆盖式）
 
     保存前自动填充 employees 和 group_snapshot。
     已锁定的排班不允许覆盖。
+
+    并发保护：客户端需把读取时拿到的 version 放进 expected_version。
+    若库中版本已不一致，说明期间被改过，返回 409 让前端刷新，
+    避免两个会话互相静默覆盖。
     """
     record = (
         db.query(Schedule)
@@ -237,29 +289,60 @@ def save_schedule(body: ScheduleSave, db: Session = Depends(get_db)):
     if record and record.locked:
         raise HTTPException(status_code=403, detail="排班已锁定，请先解锁再修改")
 
-    raw_data = [item.model_dump() for item in body.schedule]
+    # 乐观锁校验
+    if record and body.expected_version is not None:
+        if (record.version or 1) != body.expected_version:
+            raise HTTPException(
+                status_code=409,
+                detail="排班已被其他会话修改，请刷新后重新保存",
+            )
+
+    # date 类型转回 isoformat 字符串再入库（JSON 无法序列化 date 对象）
+    raw_data = []
+    for item in body.schedule:
+        data = item.model_dump()
+        data["date"] = item.date.isoformat()
+        raw_data.append(data)
+
     filled_data = _fill_employees(raw_data, db)
     snapshot = _build_group_snapshot(db, body.year, body.month)
 
     if record:
         record.schedule_json = filled_data
         record.group_snapshot = snapshot
+        record.version = (record.version or 1) + 1
+        action = "update"
     else:
         record = Schedule(
             year=body.year,
             month=body.month,
             schedule_json=filled_data,
             group_snapshot=snapshot,
+            version=1,
         )
         db.add(record)
+        action = "create"
+
+    _add_audit(
+        db,
+        current,
+        action,
+        target_id=f"{body.year}-{body.month:02d}",
+        detail=f"{'更新' if action == 'update' else '新建'}排班，共 {len(filled_data)} 天",
+    )
     db.commit()
     db.refresh(record)
     clear_stats_cache(body.year, body.month)
     return record
 
 
-@router.post("/{year}/{month}/lock", dependencies=[Depends(get_current_admin)])
-def lock_schedule(year: int, month: int, db: Session = Depends(get_db)):
+@router.post("/{year}/{month}/lock")
+def lock_schedule(
+    year: int,
+    month: int,
+    current: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
     """锁定月度排班"""
     record = (
         db.query(Schedule)
@@ -269,12 +352,18 @@ def lock_schedule(year: int, month: int, db: Session = Depends(get_db)):
     if not record:
         raise HTTPException(status_code=404, detail="排班记录不存在")
     record.locked = True
+    _add_audit(db, current, "lock", target_id=f"{year}-{month:02d}", detail="锁定排班")
     db.commit()
     return {"locked": True}
 
 
-@router.post("/{year}/{month}/unlock", dependencies=[Depends(get_current_admin)])
-def unlock_schedule(year: int, month: int, db: Session = Depends(get_db)):
+@router.post("/{year}/{month}/unlock")
+def unlock_schedule(
+    year: int,
+    month: int,
+    current: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
     """解锁月度排班"""
     record = (
         db.query(Schedule)
@@ -284,12 +373,18 @@ def unlock_schedule(year: int, month: int, db: Session = Depends(get_db)):
     if not record:
         raise HTTPException(status_code=404, detail="排班记录不存在")
     record.locked = False
+    _add_audit(db, current, "unlock", target_id=f"{year}-{month:02d}", detail="解锁排班")
     db.commit()
     return {"locked": False}
 
 
-@router.delete("/{year}/{month}", dependencies=[Depends(get_current_admin)])
-def delete_schedule(year: int, month: int, db: Session = Depends(get_db)):
+@router.delete("/{year}/{month}")
+def delete_schedule(
+    year: int,
+    month: int,
+    current: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
     """删除已保存的排班记录，恢复为自动预览状态"""
     record = (
         db.query(Schedule)
@@ -301,6 +396,9 @@ def delete_schedule(year: int, month: int, db: Session = Depends(get_db)):
     if record.locked:
         raise HTTPException(status_code=403, detail="排班已锁定，请先解锁再删除")
     db.delete(record)
+    _add_audit(
+        db, current, "delete", target_id=f"{year}-{month:02d}", detail="删除排班记录"
+    )
     db.commit()
     clear_stats_cache(year, month)
     return {"deleted": True}
