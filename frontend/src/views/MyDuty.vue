@@ -496,6 +496,11 @@ watch(selectedMonth, loadSchedule);
                   设置 → 日历 → 账户 → 添加账户 → 其他 →「添加已订阅的日历」，粘贴上面的地址。
                 </div>
                 <div>
+                  <span class="font-medium text-gray-700">安卓（华为 / 小米 / OPPO / vivo 自带日历）</span>：
+                  打开日历 App → 设置或右上角菜单 → 找「订阅日历」「从网络添加日历」「URL 导入」
+                  （各品牌名称略有差异，认准「订阅」「网络」两个关键词）→ 粘贴地址。
+                </div>
+                <div>
                   <span class="font-medium text-gray-700">安卓（Google 日历）</span>：
                   手机 App 不支持直接订阅。请在电脑上打开
                   <span class="font-mono">calendar.google.com</span>
@@ -503,9 +508,15 @@ watch(selectedMonth, loadSchedule);
                 </div>
                 <div>
                   <span class="font-medium text-gray-700">Windows</span>：
-                  系统自带「日历」应用不支持订阅，请用 Outlook ——
-                  新版 Outlook / Outlook 网页版：添加日历 → 从 Web 订阅；
+                  系统自带「日历」应用 → 左下角齿轮 → 添加日历 →「从 Internet」，粘贴地址即可；
+                  也可以用 Outlook —— 新版 Outlook / 网页版：添加日历 → 从 Web 订阅；
                   经典版 Outlook：文件 → 账户设置 → Internet 日历 → 新建。
+                </div>
+                <div>
+                  <span class="font-medium text-gray-700">Linux（银河麒麟等）</span>：
+                  系统任务栏日历只显示农历节假日，不能订阅。装一个 Thunderbird
+                  （<span class="font-mono">sudo apt install thunderbird</span>）
+                  → 日历 → 新建日历 → 在网络上 → 粘贴地址。
                 </div>
                 <div>
                   <span class="font-medium text-gray-700">不支持订阅的客户端</span>：
