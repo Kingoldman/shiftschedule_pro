@@ -2,9 +2,6 @@
 
 注意：batch/sort 路由必须放在 /{emp_id} 之前。
 """
-import secrets
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
@@ -19,7 +16,7 @@ from app.models.audit_log import AuditLog
 from app.models.employee_account import EmployeeAccount
 from app.schemas.employee import (
     EmployeeCreate, EmployeeUpdate, EmployeeOut, EmployeeBatchSort,
-    EmployeeAccountIn, EmployeeAccountOut, EmployeeFeedAction,
+    EmployeeAccountIn, EmployeeAccountOut,
 )
 
 router = APIRouter()
@@ -325,16 +322,6 @@ def _validate_username(username: str, db: Session, exclude_account_id: int | Non
     return username
 
 
-def _feed_fields(acc: EmployeeAccount | None) -> dict:
-    """组装订阅地址的响应字段（相对路径，前端自行拼接 origin）"""
-    if not acc or not acc.feed_token:
-        return {"feed_path": None, "feed_updated_at": None}
-    return {
-        "feed_path": f"/api/me/feed/{acc.feed_token}.ics",
-        "feed_updated_at": acc.feed_token_created_at,
-    }
-
-
 @router.get("/{emp_id}/account", response_model=EmployeeAccountOut)
 def get_employee_account(
     emp_id: int,
@@ -357,59 +344,7 @@ def get_employee_account(
         username=acc.username,
         is_active=acc.is_active,
         last_login_at=acc.last_login_at,
-        **_feed_fields(acc),
     )
-
-
-@router.post("/{emp_id}/account/feed-token")
-def manage_employee_feed_token(
-    emp_id: int,
-    body: EmployeeFeedAction,
-    current: Admin = Depends(get_current_admin),
-    db: Session = Depends(get_db),
-):
-    """管理员代为开通 / 重发 / 停用员工的日历订阅
-
-    员工自己也能在「我的值班」页操作，这里是为"员工还没登录过"或
-    "帮同事代配手机日历"的场景准备的。
-    """
-    e = _get_employee_or_404(emp_id, db)
-    acc = (
-        db.query(EmployeeAccount)
-        .filter(EmployeeAccount.employee_id == emp_id)
-        .first()
-    )
-    if not acc:
-        raise HTTPException(status_code=404, detail="该员工尚未开通账号")
-
-    action = (body.action or "issue").strip().lower()
-    if action == "revoke":
-        if not acc.feed_token:
-            raise HTTPException(status_code=400, detail="该员工尚未开启日历订阅")
-        acc.feed_token = None
-        acc.feed_token_created_at = None
-        detail = f"停用员工 {e.name} 的日历订阅，旧链接已失效"
-    elif action in ("issue", "rotate"):
-        if action == "issue" and acc.feed_token:
-            raise HTTPException(status_code=400, detail="已开启订阅，如需更换请重新生成")
-        acc.feed_token = secrets.token_urlsafe(24)
-        acc.feed_token_created_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        verb = "生成" if action == "issue" else "重新生成"
-        detail = f"{verb}员工 {e.name} 的日历订阅链接"
-    else:
-        raise HTTPException(status_code=400, detail="不支持的操作")
-
-    db.add(
-        AuditLog(
-            actor=current.username,
-            action=f"feed_{action}",
-            target_type="employee_account",
-            target_id=str(emp_id),
-            detail=detail,
-        )
-    )
-    db.commit()
-    return {"msg": detail, **_feed_fields(acc)}
 
 
 @router.put("/{emp_id}/account", response_model=EmployeeAccountOut)
@@ -482,7 +417,6 @@ def upsert_employee_account(
         username=acc.username,
         is_active=acc.is_active,
         last_login_at=acc.last_login_at,
-        **_feed_fields(acc),
     )
 
 

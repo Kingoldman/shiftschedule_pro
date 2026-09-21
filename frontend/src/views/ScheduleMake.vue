@@ -56,6 +56,77 @@ function saveCacheMap(map) {
 const startGroupId = ref(null)
 const dayTypeFilter = ref(['workday', 'weekend', 'holiday', 'vacation'])
 
+// ===== 快照（冻结）组信息 =====
+// 排班保存时会把当时的组名、排序、组内人员一并存进 group_snapshot。
+// 已保存月份必须按快照显示：事后人员调组、离职、组被删除或改序，
+// 都不该改写历史月份的画面——否则「第 1 组当年是 A/B/C，现在是 A/B」
+// 就会把历史排班显示成现在的人员，统计与回溯全部失真。
+const snapshotGroups = computed(() => {
+  const snap = savedSchedule.value?.group_snapshot
+  if (!snap?.groups?.length) return []
+  return snap.groups.map((g) => ({
+    id: g.id,
+    name: g.name,
+    order_id: g.order_id,
+    employees: (g.employees || [])
+      .filter((e) => e.state === 1)
+      .map((e) => ({ id: e.id, name: e.name })),
+    fromSnapshot: true,
+  }))
+})
+
+const snapshotGroupMap = computed(() =>
+  Object.fromEntries(snapshotGroups.value.map((g) => [g.id, g]))
+)
+
+// 当前组（统一成与快照相同的结构，方便复用同一套渲染逻辑）
+const currentGroups = computed(() =>
+  groups.value.map((g) => ({
+    id: g.id,
+    name: g.name,
+    order_id: g.order_id,
+    employees: staffStore.employees
+      .filter((e) => e.group_id === g.id && e.state === 1)
+      .sort((a, b) => a.order_id - b.order_id)
+      .map((e) => ({ id: e.id, name: e.name })),
+    fromSnapshot: false,
+  }))
+)
+
+// 展示/选择用的组列表：已保存月份以快照为准，未保存月份用当前组
+const displayGroups = computed(() => {
+  if (snapshotGroups.value.length === 0) return currentGroups.value
+  const snapIds = new Set(snapshotGroups.value.map((g) => g.id))
+  return [
+    ...snapshotGroups.value,
+    ...currentGroups.value.filter((g) => !snapIds.has(g.id)),
+  ].sort((a, b) => a.order_id - b.order_id)
+})
+
+// 组是否已从人员管理中删除（快照里有、当前没有）
+function isGroupAlive(g) {
+  return groups.value.some((x) => x.id === g.id)
+}
+
+// 还原已保存月份的起始组
+// 以前起始组只留在内存里：保存后切走再回来，startGroupId 被重置为 null，
+// 而这时又不会走 auto_preview（已有保存记录），于是回退到 groups[0]，
+// 所有已保存月份都显示成「第 1 组」。现在起始组随排班一起落库，
+// 老记录没有该字段时按第一个值班日所在的组反推。
+// 校验基准用 displayGroups：已保存月份里即便组后来被删除，
+// 快照中仍能查到，不会掉回「第 1 组」。
+function restoreStartGroup() {
+  const valid = (id) => id != null && displayGroups.value.some(g => g.id === id)
+  if (valid(startGroupId.value)) return
+  const saved = savedSchedule.value
+  let gid = saved?.start_group_id ?? null
+  if (!valid(gid)) gid = saved?.schedule_json?.[0]?.group_id ?? null
+  if (!valid(gid)) {
+    gid = displayGroups.value[0]?.id ?? groups.value[0]?.id ?? null
+  }
+  startGroupId.value = gid
+}
+
 const dayTypeOptions = [
   { value: 'workday', label: '工作日', color: 'bg-gray-100 text-gray-600' },
   { value: 'weekend', label: '周末', color: 'bg-blue-100 text-blue-700' },
@@ -92,9 +163,7 @@ async function loadData(forceRefresh = false) {
           } else {
             await autoPreviewSchedule(y, m)
           }
-          if (groups.value.length > 0 && !startGroupId.value) {
-            startGroupId.value = groups.value[0].id
-          }
+          restoreStartGroup()
           return
         }
         // 缓存过期，清除旧条目
@@ -119,9 +188,7 @@ async function loadData(forceRefresh = false) {
     } else {
       await autoPreviewSchedule(y, m)
     }
-    if (groups.value.length > 0 && !startGroupId.value) {
-      startGroupId.value = groups.value[0].id
-    }
+    restoreStartGroup()
 
     const cacheMap = getCacheMap()
     cacheMap.set(cacheKey, { days: d, savedSchedule: s, ts: Date.now() })
@@ -327,6 +394,8 @@ async function saveSchedule() {
       year: y,
       month: m,
       schedule: schedule.value,
+      // 起始组一起保存，否则再次进入界面时无法还原
+      start_group_id: startGroupId.value,
       expected_version: savedSchedule.value?.version ?? null,
     })
     // 保存后自动锁定
@@ -404,14 +473,13 @@ async function toggleLock() {
 
 function changeGroupForDay(item, groupId) {
   if (!canModify.value) return
-  const g = groups.value.find((x) => x.id === groupId)
+  // 用展示列表（已保存月份=快照）取人员，保证"选到的组"和"写入的人员"一致，
+  // 不会出现下拉显示 A/B/C、实际保存成 A/B 的情况
+  const g = displayGroups.value.find((x) => x.id === groupId)
   if (!g) return
   item.group_id = groupId
   item.group_name = g.name
-  const members = staffStore.employees
-    .filter(e => e.group_id === groupId && e.state === 1)
-    .sort((a, b) => a.order_id - b.order_id)
-  item.employees = members.map(e => ({ id: e.id, name: e.name }))
+  item.employees = (g.employees || []).map(e => ({ id: e.id, name: e.name }))
   hasChange.value = true
 }
 
@@ -434,6 +502,31 @@ function groupLabel(g) {
   const members = groupMembers.value[g.id] || []
   const names = members.length > 0 ? members.join('') : '空组'
   return `${g.order_id}. ${names}`
+}
+
+// 下拉选项标签：已保存月份用快照人员，未保存月份用当前人员
+function groupOptionLabel(g) {
+  const names = (g.employees || []).map((e) => e.name).join('、')
+  const dead = g.fromSnapshot && !isGroupAlive(g) ? '（已撤销）' : ''
+  return `第${g.order_id}组 ${names || '空组'}${dead}`
+}
+
+// 日历格里的组标签：只显示「第x组」（组名即成员拼接，与下面人员重复，不显示）
+function cellGroupLabel(item) {
+  const sg = snapshotGroupMap.value[item.group_id]
+  if (sg) return `第${sg.order_id}组`
+  const g = groups.value.find((x) => x.id === item.group_id)
+  if (g) return `第${g.order_id}组`
+  return item.group_name || '—'
+}
+
+// 日历格里的值班人员：取保存时冻结的人员；缺失时回退到快照成员
+function cellEmployeeNames(item) {
+  const names = (item.employees || []).map((e) => e.name).filter(Boolean)
+  if (names.length > 0) return names.join('、')
+  const sg = snapshotGroupMap.value[item.group_id]
+  if (sg?.employees?.length) return sg.employees.map((e) => e.name).join('、')
+  return '无成员'
 }
 function groupOrderIdLabel(groupId) {
   const g = groups.value.find(x => x.id === groupId)
@@ -982,10 +1075,19 @@ async function confirmScheduleImport() {
       </div>
 
       <div class="flex flex-wrap items-end gap-3">
-        <div class="w-40">
-          <label class="block text-xs font-medium text-gray-600 mb-2">起始组</label>
+        <div class="w-64">
+          <label class="block text-xs font-medium text-gray-600 mb-2">
+            起始组
+            <span v-if="snapshotGroups.length" class="text-gray-400 font-normal">（按保存时快照显示）</span>
+          </label>
           <el-select v-model="startGroupId" class="w-full" placeholder="选择起始组" :disabled="isLocked">
-            <el-option v-for="g in groups" :key="g.id" :label="groupLabel(g)" :value="g.id" />
+            <el-option
+              v-for="g in displayGroups"
+              :key="g.id"
+              :label="groupOptionLabel(g)"
+              :value="g.id"
+              :disabled="g.fromSnapshot && !isGroupAlive(g)"
+            />
           </el-select>
         </div>
         <div class="w-52">
@@ -1084,15 +1186,21 @@ async function confirmScheduleImport() {
               @change="(val) => changeGroupForDay(cell.item, val)"
               @visible-change="(vis) => activeSelectDate = vis ? cell.item.date : null"
             >
-              <el-option v-for="g in groups" :key="g.id" :label="`第${g.order_id}组`" :value="g.id">
-                <span class="text-xs">{{ groupLabel(g) }}</span>
+              <el-option v-for="g in displayGroups" :key="g.id" :label="`第${g.order_id}组`" :value="g.id">
+                <span class="text-xs">{{ groupOptionLabel(g) }}</span>
               </el-option>
             </el-select>
-            <div v-else class="text-xs font-medium text-gray-700">
-              {{ groupOrderIdLabel(cell.item.group_id) || cell.item.group_name }}
+            <!-- 组标签：已保存月份取快照（当时的序号+组名），组被删也不掉底 -->
+            <div v-else class="text-xs font-medium text-gray-700 leading-tight">
+              {{ cellGroupLabel(cell.item) }}
+              <span
+                v-if="snapshotGroupMap[cell.item.group_id] && !isGroupAlive(snapshotGroupMap[cell.item.group_id])"
+                class="text-[10px] text-gray-400"
+              >（组已撤销）</span>
             </div>
-            <div class="text-[10px] text-gray-500 truncate">
-              {{ cell.item.employees.map(e => e.name).join('、') || '无成员' }}
+            <!-- 值班人员：保存时冻结的人员，过长换行而不是截断 -->
+            <div class="text-[10px] text-gray-500 leading-tight break-words">
+              {{ cellEmployeeNames(cell.item) }}
             </div>
             <button
               v-if="canModify"

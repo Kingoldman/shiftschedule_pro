@@ -34,6 +34,9 @@ class Schedule(Base):
     month: Mapped[int] = mapped_column(Integer)
     # 月度排班 JSON 数据
     schedule_json: Mapped[list] = mapped_column(JSON, default=list)
+    # 生成该月排班时的起始组，保存后需原样回显
+    # 早期版本没有这一列（老库为 NULL），读取时会从 schedule_json 反推
+    start_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 保存时的组/员工快照，用于历史统计
     # 结构: {"groups": [{"id":1, "name":"张三李四", "order_id":1, "employees": [...]}],
     #        "state_logs": [...]}

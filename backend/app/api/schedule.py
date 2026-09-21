@@ -161,6 +161,26 @@ def auto_preview(year: int, month: int, db: Session = Depends(get_db)):
     return {"schedule": result, "start_group_id": start_group_id}
 
 
+def _infer_start_group_id(schedule_json: list[dict] | None) -> int | None:
+    """从排班结果反推起始组
+
+    轮转规则是「起始组排第一个值班日」，所以第一个值班日所在的组就是起始组。
+    仅用于兼容没有 start_group_id 的历史记录（该字段是后来才加的）。
+    注意：只改内存中的响应对象，不写回数据库。
+    """
+    if not schedule_json:
+        return None
+    return schedule_json[0].get("group_id")
+
+
+def _to_out(record: Schedule) -> ScheduleOut:
+    """ORM 记录转响应体，起始组缺失时按排班结果反推"""
+    out = ScheduleOut.model_validate(record)
+    if out.start_group_id is None:
+        out.start_group_id = _infer_start_group_id(record.schedule_json)
+    return out
+
+
 @router.get(
     "/{year}/{month}",
     response_model=ScheduleOut | None,
@@ -168,11 +188,14 @@ def auto_preview(year: int, month: int, db: Session = Depends(get_db)):
 )
 def get_schedule(year: int, month: int, db: Session = Depends(get_db)):
     """获取某月排班数据。不存在返回 null，前端按 null 显示"未排班"。"""
-    return (
+    record = (
         db.query(Schedule)
         .filter(Schedule.year == year, Schedule.month == month)
         .first()
     )
+    if record is None:
+        return None
+    return _to_out(record)
 
 
 def _build_group_snapshot(db: Session, year: int = None, month: int = None) -> dict:
@@ -307,9 +330,16 @@ def save_schedule(
     filled_data = _fill_employees(raw_data, db)
     snapshot = _build_group_snapshot(db, body.year, body.month)
 
+    # 起始组随排班一起保存，重新进入界面时才能回显当时的选择。
+    # 没传（老客户端）或组已被删除时，按排班结果反推，避免回显到一个不存在/错误的组。
+    start_group_id = body.start_group_id
+    if start_group_id is None or not db.get(ShiftGroup, start_group_id):
+        start_group_id = _infer_start_group_id(filled_data)
+
     if record:
         record.schedule_json = filled_data
         record.group_snapshot = snapshot
+        record.start_group_id = start_group_id
         record.version = (record.version or 1) + 1
         action = "update"
     else:
@@ -318,6 +348,7 @@ def save_schedule(
             month=body.month,
             schedule_json=filled_data,
             group_snapshot=snapshot,
+            start_group_id=start_group_id,
             version=1,
         )
         db.add(record)
@@ -333,7 +364,7 @@ def save_schedule(
     db.commit()
     db.refresh(record)
     clear_stats_cache(body.year, body.month)
-    return record
+    return _to_out(record)
 
 
 @router.post("/{year}/{month}/lock")

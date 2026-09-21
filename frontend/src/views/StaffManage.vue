@@ -71,10 +71,6 @@ const accSaving = ref(false)
 const accTarget = ref(null)
 const accForm = ref({ username: '', password: '', is_active: true })
 
-// ===== 日历订阅（管理员代管） =====
-const accFeed = ref({ feed_path: null, feed_updated_at: null })
-const accFeedBusy = ref(false)
-
 async function openAccountDialog(row) {
   accTarget.value = row
   const existing = accountOf(row.id)
@@ -83,63 +79,7 @@ async function openAccountDialog(row) {
     password: '',
     is_active: existing ? existing.is_active : true,
   }
-  accFeed.value = { feed_path: null, feed_updated_at: null }
   accDialogVisible.value = true
-  if (existing) await loadAccountFeed(row.id)
-}
-
-async function loadAccountFeed(empId) {
-  try {
-    const data = await accountApi.get(empId)
-    accFeed.value = {
-      feed_path: data?.feed_path || null,
-      feed_updated_at: data?.feed_updated_at || null,
-    }
-  } catch {
-    accFeed.value = { feed_path: null, feed_updated_at: null }
-  }
-}
-
-const accFeedUrl = computed(() =>
-  accFeed.value.feed_path ? window.location.origin + accFeed.value.feed_path : ''
-)
-
-async function copyAccFeed() {
-  try {
-    await navigator.clipboard.writeText(accFeedUrl.value)
-    ElMessage.success('订阅地址已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选中地址复制')
-  }
-}
-
-async function accFeedAction(action) {
-  const row = accTarget.value
-  if (!row) return
-  if (action === 'rotate') {
-    try {
-      await ElMessageBox.confirm(
-        '重新生成后旧地址立即失效，已订阅的日历需重新添加。确定继续？',
-        '重新生成订阅地址',
-        { type: 'warning', confirmButtonText: '重新生成', cancelButtonText: '取消' }
-      )
-    } catch {
-      return
-    }
-  }
-  accFeedBusy.value = true
-  try {
-    const data = await accountApi.feedToken(row.id, action)
-    accFeed.value = {
-      feed_path: data?.feed_path || null,
-      feed_updated_at: data?.feed_updated_at || null,
-    }
-    ElMessage.success(data?.msg || '操作成功')
-  } catch (e) {
-    console.error('操作失败:', e)
-  } finally {
-    accFeedBusy.value = false
-  }
 }
 
 async function saveAccount() {
@@ -1096,39 +1036,10 @@ async function confirmImport() {
         <el-form-item label="启用登录">
           <el-switch v-model="accForm.is_active" />
         </el-form-item>
-        <el-form-item v-if="accountOf(accTarget?.id)" label="日历订阅">
-          <div class="w-full">
-            <div v-if="accFeed.feed_path" class="space-y-2">
-              <el-input :model-value="accFeedUrl" readonly size="small">
-                <template #append>
-                  <button class="px-2 text-blue-600" @click="copyAccFeed">复制</button>
-                </template>
-              </el-input>
-              <div class="flex items-center gap-2 flex-wrap">
-                <button class="btn-ghost text-xs" :disabled="accFeedBusy" @click="accFeedAction('rotate')">
-                  <el-icon><Refresh /></el-icon>重新生成
-                </button>
-                <button class="btn-ghost text-xs text-red-500" :disabled="accFeedBusy" @click="accFeedAction('revoke')">
-                  <el-icon><CircleClose /></el-icon>停用
-                </button>
-                <span v-if="accFeed.feed_updated_at" class="text-xs text-gray-400">
-                  {{ accFeed.feed_updated_at.replace('T', ' ').slice(0, 16) }}
-                </span>
-              </div>
-            </div>
-            <div v-else class="flex items-center gap-2 flex-wrap">
-              <span class="text-xs text-gray-400">尚未开启，员工可在「我的值班」页自行开启</span>
-              <button class="btn-ghost text-xs" :disabled="accFeedBusy" @click="accFeedAction('issue')">
-                <el-icon><Calendar /></el-icon>代为生成
-              </button>
-            </div>
-          </div>
-        </el-form-item>
       </el-form>
       <div class="text-xs text-gray-400 -mt-2 mb-2 pl-2">
         员工账号只能查看本人值班安排，无法进入排班与统计页面。
         重置密码会使其已登录的会话立即失效。
-        订阅地址含个人密钥，转发即等于公开其班表。
       </div>
       <template #footer>
         <button

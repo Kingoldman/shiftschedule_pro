@@ -35,6 +35,10 @@ class ScheduleSave(BaseModel):
     year: int = Field(..., ge=2000, le=2100)
     month: int = Field(..., ge=1, le=12)
     schedule: list[ScheduleItemIn]
+    # 生成排班时选择的起始组，随排班一起落库。
+    # 此前不存这个字段，重新进入界面时只能回退到"第 1 组"，
+    # 导致已保存月份的起始组显示错误。
+    start_group_id: int | None = None
     # 乐观锁：客户端提交时带上读到的版本号，服务端不一致则拒绝（409）
     expected_version: int | None = Field(
         None, description="期望的当前版本号，用于并发冲突检测"
@@ -62,6 +66,7 @@ class ScheduleOut(BaseModel):
     year: int
     month: int
     schedule_json: list
+    start_group_id: int | None = None
     group_snapshot: dict | None = None
     locked: bool = False
     version: int = 1

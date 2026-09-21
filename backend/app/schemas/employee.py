@@ -57,16 +57,3 @@ class EmployeeAccountOut(BaseModel):
     username: str | None = None
     is_active: bool | None = None
     last_login_at: datetime | None = None
-    # 日历订阅地址（相对路径，未开启时为 None）
-    feed_path: str | None = None
-    feed_updated_at: datetime | None = None
-
-
-class EmployeeFeedAction(BaseModel):
-    """管理员代为管理员工的日历订阅令牌
-
-    issue  = 首次开通（已有令牌时返回 400，避免误覆盖）
-    rotate = 重新生成，旧链接立即失效
-    revoke = 停用订阅
-    """
-    action: str = "issue"

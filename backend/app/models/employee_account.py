@@ -30,15 +30,6 @@ class EmployeeAccount(Base):
     token_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     # 停用后无法登录，但账号与历史审计保留
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    # 日历订阅令牌：日历客户端（iOS/Google/Outlook）无法携带 Cookie 或 Authorization 头，
-    # 只能把凭据放在 URL 里，因此单独发放一个长期令牌，与登录密码解耦。
-    # 为空表示未开启订阅；重新生成或注销后旧链接立即失效。
-    feed_token: Mapped[str | None] = mapped_column(
-        String(64), unique=True, index=True, nullable=True
-    )
-    feed_token_created_at: Mapped[datetime | None] = mapped_column(
-        DateTime, nullable=True
-    )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp()

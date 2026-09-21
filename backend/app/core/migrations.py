@@ -3,8 +3,8 @@
 为什么需要它：SQLAlchemy 的 `create_all()` 只会创建**不存在**的表，
 既不会给已有表补列，也不会修改已有表的约束。本项目的两处改动都触碰了这个边界：
 
-1. 新增列：`schedule.version`、`admin.token_version`
-   —— 老库没有这两列，直接查询会报 "no such column"。
+1. 新增列：`schedule.version`、`schedule.start_group_id`、`admin.token_version`
+   —— 老库没有这几列，直接查询会报 "no such column"。
 2. 修改约束：`employee_state_log` 原本声明了
    `FOREIGN KEY(employee_id) REFERENCES employee(id) ON DELETE CASCADE`。
    现在该表改为「留档表」，要求删除员工时日志保留。但老库的建表语句里
@@ -28,21 +28,16 @@ logger = logging.getLogger(__name__)
 _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     "schedule": [
         ("version", "ALTER TABLE schedule ADD COLUMN version INTEGER NOT NULL DEFAULT 1"),
+        # 起始组：保存排班时记录，重新进入排班界面时原样回显
+        (
+            "start_group_id",
+            "ALTER TABLE schedule ADD COLUMN start_group_id INTEGER",
+        ),
     ],
     "admin": [
         (
             "token_version",
             "ALTER TABLE admin ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1",
-        ),
-    ],
-    "employee_account": [
-        (
-            "feed_token",
-            "ALTER TABLE employee_account ADD COLUMN feed_token VARCHAR(64)",
-        ),
-        (
-            "feed_token_created_at",
-            "ALTER TABLE employee_account ADD COLUMN feed_token_created_at DATETIME",
         ),
     ],
 }
@@ -71,25 +66,6 @@ def _add_missing_columns(db: Session) -> None:
                 continue
             db.execute(text(ddl))
             logger.info("迁移：表 %s 已补充列 %s", table, col)
-
-
-def _ensure_feed_token_index(db: Session) -> None:
-    """为老库的 employee_account 补上 feed_token 唯一索引
-
-    新建表时 `unique=True` 会内联进 CREATE TABLE；但 ALTER TABLE ADD COLUMN
-    无法追加唯一约束，只能补一个独立索引。SQLite 的唯一索引允许多个 NULL，
-    所以"尚未开通订阅"的员工（feed_token 为空）不会互相冲突。
-    """
-    if not _table_exists(db, "employee_account"):
-        return
-    if "feed_token" not in _existing_columns(db, "employee_account"):
-        return
-    db.execute(
-        text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_employee_account_feed_token "
-            "ON employee_account (feed_token)"
-        )
-    )
 
 
 def _has_foreign_key(db: Session, table: str) -> bool:
@@ -162,7 +138,6 @@ def run_migrations(db: Session) -> None:
 
     # 2. 补齐新增列
     _add_missing_columns(db)
-    _ensure_feed_token_index(db)
 
     # 3. 日志表去外键
     _rebuild_state_log_without_fk(db)
